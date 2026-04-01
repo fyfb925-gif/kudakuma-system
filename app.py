@@ -454,7 +454,6 @@ def page_labels(df):
             st.success("已标记为已打印。")
             st.rerun()
 
-else:
     st.markdown("### 70×40 标签预览")
 
     grouped_records = []
