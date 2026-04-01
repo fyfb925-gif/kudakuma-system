@@ -133,7 +133,8 @@ def load_items():
     cols = [
         "item_id", "order_no", "brand", "model", "color", "size", "qty", "reserved",
         "purchased", "purchase_store", "purchase_date", "arrived", "arrival_date",
-        "printed", "shipped", "shipped_date", "tracking_no", "note"
+        "printed", "shipped", "shipped_date", "tracking_no", "note",
+        "order_status", "cancel_reason", "cancelled_at"
     ]
     df = read_sheet("order_items")
     if df.empty:
@@ -144,6 +145,9 @@ def load_items():
             df[c] = ""
 
     df = df[cols].fillna("")
+
+    df["order_status"] = df["order_status"].replace("", "active")
+    df["order_status"] = df["order_status"].fillna("active")
 
     for c in ["item_id", "qty", "reserved", "purchased", "arrived", "printed", "shipped"]:
         df[c] = df[c].apply(lambda x: safe_int(x, 0))
@@ -419,7 +423,11 @@ def page_arrival(df):
 
 def page_labels(df):
     st.subheader("标签打印")
-    ready_df = df[(df["arrived"] == 1) & (df["shipped"] == 0)].copy()
+    ready_df = df[
+    (df["arrived"] == 1) &
+    (df["shipped"] == 0) &
+    (df["order_status"] != "cancelled")
+].copy()
 
     if ready_df.empty:
         st.success("当前没有可打印标签的商品。")
@@ -452,6 +460,15 @@ def page_labels(df):
             items_df.loc[items_df["item_id"] == int(selected_item), "printed"] = 1
             save_items(items_df)
             st.success("已标记为已打印。")
+            st.rerun()
+            
+        if st.button("取消此商品", use_container_width=True):
+            items_df = load_items()
+            items_df.loc[items_df["item_id"] == int(selected_item), "order_status"] = "cancelled"
+            items_df.loc[items_df["item_id"] == int(selected_item), "cancel_reason"] = "用户取消"
+            items_df.loc[items_df["item_id"] == int(selected_item), "cancelled_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+            save_items(items_df)
+            st.warning("该商品已取消")
             st.rerun()
 
     st.markdown("### 70×40 标签预览")
@@ -502,12 +519,23 @@ def page_labels(df):
             
             with c2:
                 st.write(f"商品数：{row['商品数']}")
+
                 if st.button("标记已打印", key=f"mark_printed_{i}", use_container_width=True):
                     ids = [int(x) for x in row["item_ids"].split(",") if x]
                     items_df = load_items()
                     items_df.loc[items_df["item_id"].isin(ids), "printed"] = 1
                     save_items(items_df)
                     st.success(f"{row['客户姓名']} 已标记打印")
+                    st.rerun()
+
+                if st.button("取消这组商品", key=f"cancel_group_{i}", use_container_width=True):
+                    ids = [int(x) for x in row["item_ids"].split(",") if x]
+                    items_df = load_items()
+                    items_df.loc[items_df["item_id"].isin(ids), "order_status"] = "cancelled"
+                    items_df.loc[items_df["item_id"].isin(ids), "cancel_reason"] = "用户取消"
+                    items_df.loc[items_df["item_id"].isin(ids), "cancelled_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+                    save_items(items_df)
+                    st.warning(f"{row['客户姓名']} 已取消")
                     st.rerun()
 
     download_df(
