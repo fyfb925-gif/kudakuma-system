@@ -111,7 +111,7 @@ def grouped_product_text(items_df):
         elif spec:
             lines.append(f"{spec} ×{qty}")
 
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 # =========================
 # 数据加载
