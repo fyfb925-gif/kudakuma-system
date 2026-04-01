@@ -18,7 +18,7 @@ def get_conn():
 def read_sheet(worksheet: str) -> pd.DataFrame:
     conn = get_conn()
     try:
-        df = conn.read(worksheet=worksheet, ttl="0")
+        df = conn.read(worksheet=worksheet, ttl=0)
         if df is None:
             return pd.DataFrame()
         return pd.DataFrame(df)
@@ -82,7 +82,7 @@ def grouped_label_text(customer_name, items_df):
     product_text = grouped_product_text(items_df)
 
     if product_text:
-        return customer_text + "\\n" + product_text
+        return customer_text + "\n" + product_text
     return customer_text
 
 
@@ -182,12 +182,12 @@ def combine_data():
 
     if orders.empty or items.empty:
         return pd.DataFrame(columns=[
-            "order_no", "order_date", "customer_name", "source", "remark",
-            "item_id", "brand", "model", "color", "size", "qty", "reserved",
-            "purchased", "purchase_store", "purchase_date", "arrived",
-            "arrival_date", "printed", "shipped", "shipped_date",
-            "tracking_no", "note"
-        ])
+    "order_no", "order_date", "customer_name", "source", "remark",
+    "item_id", "brand", "model", "color", "size", "qty", "reserved",
+    "purchased", "purchase_store", "purchase_date", "arrived",
+    "arrival_date", "printed", "shipped", "shipped_date",
+    "tracking_no", "note", "order_status", "cancel_reason", "cancelled_at"
+])
 
     # 关键修复：统一 order_no 格式
     orders["order_no"] = orders["order_no"].astype(str).str.strip()
@@ -210,12 +210,22 @@ def fetch_dashboard_metrics(df):
             "今日已发货": 0,
         }
 
+    active_df = df[df["order_status"] != "cancelled"].copy()
+
+    if active_df.empty:
+        return {
+            "待采购": 0,
+            "已采购未到货": 0,
+            "已到货待发货": 0,
+            "今日已发货": 0,
+        }
+
     today = today_str()
     return {
-        "待采购": int(((df["reserved"] == 1) & (df["purchased"] == 0)).sum()),
-        "已采购未到货": int(((df["purchased"] == 1) & (df["arrived"] == 0)).sum()),
-        "已到货待发货": int(((df["arrived"] == 1) & (df["shipped"] == 0)).sum()),
-        "今日已发货": int(((df["shipped"] == 1) & (df["shipped_date"].astype(str) == today)).sum()),
+        "待采购": int(((active_df["reserved"] == 1) & (active_df["purchased"] == 0)).sum()),
+        "已采购未到货": int(((active_df["purchased"] == 1) & (active_df["arrived"] == 0)).sum()),
+        "已到货待发货": int(((active_df["arrived"] == 1) & (active_df["shipped"] == 0)).sum()),
+        "今日已发货": int(((active_df["shipped"] == 1) & (active_df["shipped_date"].astype(str) == today)).sum()),
     }
 
 
@@ -247,7 +257,12 @@ def page_dashboard(df):
         st.info("还没有订单，先去“订单录入”添加第一批数据。")
         return
 
-    pending_ship = df[(df["arrived"] == 1) & (df["shipped"] == 0)]
+    pending_ship = df[
+        (df["arrived"] == 1) &
+        (df["shipped"] == 0) &
+        (df["order_status"] != "cancelled")
+    ]
+    
     if pending_ship.empty:
         st.success("目前没有待发货商品。")
     else:
@@ -336,6 +351,9 @@ def page_order_entry():
                 "shipped_date": "",
                 "tracking_no": "",
                 "note": safe_str(row.get("备注")),
+                "order_status": "active",
+                "cancel_reason": "",
+                "cancelled_at": "",
             })
             next_id += 1
 
@@ -349,7 +367,11 @@ def page_order_entry():
 
 def page_purchase(df):
     st.subheader("采购清单")
-    purchase_df = df[(df["reserved"] == 1) & (df["purchased"] == 0)].copy()
+    purchase_df = df[
+    (df["reserved"] == 1) &
+    (df["purchased"] == 0) &
+    (df["order_status"] != "cancelled")
+].copy()
 
     if purchase_df.empty:
         st.success("当前没有待采购商品。")
@@ -386,7 +408,11 @@ def page_purchase(df):
 
 def page_arrival(df):
     st.subheader("到货登记")
-    arrival_df = df[(df["purchased"] == 1) & (df["arrived"] == 0)].copy()
+    arrival_df = df[
+    (df["purchased"] == 1) &
+    (df["arrived"] == 0) &
+    (df["order_status"] != "cancelled")
+].copy()
 
     if arrival_df.empty:
         st.success("当前没有待到货商品。")
@@ -547,7 +573,11 @@ def page_labels(df):
 
 def page_shipping(df):
     st.subheader("发货登记")
-    ship_df = df[(df["arrived"] == 1) & (df["shipped"] == 0)].copy()
+    ship_df = df[
+    (df["arrived"] == 1) &
+    (df["shipped"] == 0) &
+    (df["order_status"] != "cancelled")
+].copy()
 
     if ship_df.empty:
         st.success("当前没有待发货商品。")
