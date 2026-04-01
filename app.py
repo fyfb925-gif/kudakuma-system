@@ -154,9 +154,15 @@ def combine_data():
             "tracking_no", "note"
         ])
 
+    # 关键修复：统一 order_no 格式
+    orders["order_no"] = orders["order_no"].astype(str).str.strip()
+    items["order_no"] = items["order_no"].astype(str).str.strip()
+
     df = items.merge(orders, on="order_no", how="left")
+
     base = ["order_no", "order_date", "customer_name", "source", "remark"]
     others = [c for c in df.columns if c not in base]
+
     return df[base + others].fillna("")
 
 
