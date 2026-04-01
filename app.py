@@ -485,7 +485,9 @@ def page_labels(df):
                     value=row["客户文本"],
                     key=f"customer_text_{i}"
                 )
-
+                st.markdown("**复制客户名称**")
+                st.code(row["客户文本"], language=None)
+                
                 st.markdown("**商品内容文本框**")
                 st.text_area(
                     f"商品内容_{i}",
@@ -493,7 +495,9 @@ def page_labels(df):
                     height=160,
                     key=f"product_text_{i}"
                 )
-
+               st.markdown("**复制商品内容**")
+               st.code(row["商品文本"], language=None)
+            
             with c2:
                 st.write(f"商品数：{row['商品数']}")
                 if st.button("标记已打印", key=f"mark_printed_{i}", use_container_width=True):
