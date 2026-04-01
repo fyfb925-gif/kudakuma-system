@@ -1,135 +1,174 @@
-
-import sqlite3
 from datetime import date, datetime
-from pathlib import Path
-from typing import Optional
-
 import pandas as pd
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 
-DB_PATH = Path("kudakuma_orders.db")
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1r6oBLOzvPPCD2wc_epjH3YgV9Vx74X4sxGqZuDTQnsw/edit?usp=sharing"
 
 
-# -----------------------------
-# Database
-# -----------------------------
+@st.cache_resource
 def get_conn():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return st.connection("gsheets", type=GSheetsConnection)
 
 
-def init_db():
+def read_sheet(worksheet: str) -> pd.DataFrame:
     conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS orders (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        order_no TEXT UNIQUE,
-        order_date TEXT NOT NULL,
-        customer_name TEXT NOT NULL,
-        source TEXT,
-        remark TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS order_items (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        order_id INTEGER NOT NULL,
-        brand TEXT,
-        model TEXT NOT NULL,
-        color TEXT,
-        size TEXT,
-        qty INTEGER DEFAULT 1,
-        reserved INTEGER DEFAULT 1,
-        purchased INTEGER DEFAULT 0,
-        purchase_store TEXT,
-        purchase_date TEXT,
-        arrived INTEGER DEFAULT 0,
-        arrival_date TEXT,
-        printed INTEGER DEFAULT 0,
-        shipped INTEGER DEFAULT 0,
-        shipped_date TEXT,
-        tracking_no TEXT,
-        note TEXT,
-        FOREIGN KEY(order_id) REFERENCES orders(id)
-    )
-    """)
-
-    conn.commit()
-    conn.close()
+    try:
+        df = conn.read(spreadsheet=SPREADSHEET_URL, worksheet=worksheet, ttl=0)
+    except Exception:
+        return pd.DataFrame()
+    if df is None:
+        return pd.DataFrame()
+    return pd.DataFrame(df)
 
 
-# -----------------------------
-# Helpers
-# -----------------------------
-def run_query(sql: str, params: tuple = ()) -> pd.DataFrame:
+def write_sheet(worksheet: str, df: pd.DataFrame):
     conn = get_conn()
-    df = pd.read_sql_query(sql, conn, params=params)
-    conn.close()
-    return df
+    conn.update(spreadsheet=SPREADSHEET_URL, worksheet=worksheet, data=df)
 
 
-def execute(sql: str, params: tuple = ()) -> None:
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(sql, params)
-    conn.commit()
-    conn.close()
+def ensure_sheets():
+    orders_cols = ["order_no", "order_date", "customer_name", "source", "remark", "created_at"]
+    items_cols = [
+        "item_id", "order_no", "brand", "model", "color", "size", "qty", "reserved",
+        "purchased", "purchase_store", "purchase_date", "arrived", "arrival_date",
+        "printed", "shipped", "shipped_date", "tracking_no", "note"
+    ]
+    settings_cols = ["key", "value"]
+
+    orders = read_sheet("orders")
+    if orders.empty or list(orders.columns) != orders_cols:
+        write_sheet("orders", pd.DataFrame(columns=orders_cols))
+
+    items = read_sheet("order_items")
+    if items.empty or list(items.columns) != items_cols:
+        write_sheet("order_items", pd.DataFrame(columns=items_cols))
+
+    settings = read_sheet("settings")
+    if settings.empty or list(settings.columns) != settings_cols:
+        write_sheet("settings", pd.DataFrame(columns=settings_cols))
 
 
-def executemany(sql: str, params_list: list[tuple]) -> None:
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.executemany(sql, params_list)
-    conn.commit()
-    conn.close()
-
-
-def today_str() -> str:
+def today_str():
     return date.today().isoformat()
 
 
-def gen_order_no() -> str:
-    today = date.today().strftime("%Y%m%d")
-    df = run_query(
-        "SELECT COUNT(*) AS cnt FROM orders WHERE order_date = ?",
-        (today_str(),),
-    )
-    seq = int(df.loc[0, "cnt"]) + 1
-    return f"{today}-{seq:03d}"
+def now_str():
+    return datetime.now().isoformat(timespec="seconds")
 
 
-def item_label_text(row: pd.Series) -> str:
-    parts = []
-    if str(row.get("brand") or "").strip():
-        parts.append(str(row["brand"]).strip())
-    if str(row.get("model") or "").strip():
-        parts.append(str(row["model"]).strip())
-    item = " ".join(parts).strip()
-    spec = " / ".join(
-        [x for x in [str(row.get("color") or "").strip(), str(row.get("size") or "").strip()] if x]
-    )
+def safe_str(v):
+    if pd.isna(v):
+        return ""
+    return str(v).strip()
+
+
+def safe_int(v, default=0):
+    try:
+        if pd.isna(v) or v == "":
+            return default
+        return int(float(v))
+    except Exception:
+        return default
+
+
+def load_orders():
+    cols = ["order_no", "order_date", "customer_name", "source", "remark", "created_at"]
+    df = read_sheet("orders")
+    if df.empty:
+        return pd.DataFrame(columns=cols)
+    for c in cols:
+        if c not in df.columns:
+            df[c] = ""
+    return df[cols].fillna("")
+
+
+def load_items():
+    cols = [
+        "item_id", "order_no", "brand", "model", "color", "size", "qty", "reserved",
+        "purchased", "purchase_store", "purchase_date", "arrived", "arrival_date",
+        "printed", "shipped", "shipped_date", "tracking_no", "note"
+    ]
+    df = read_sheet("order_items")
+    if df.empty:
+        return pd.DataFrame(columns=cols)
+    for c in cols:
+        if c not in df.columns:
+            df[c] = ""
+    df = df[cols].fillna("")
+    for c in ["item_id", "qty", "reserved", "purchased", "arrived", "printed", "shipped"]:
+        df[c] = df[c].apply(lambda x: safe_int(x, 0))
+    return df
+
+
+def save_orders(df):
+    write_sheet("orders", df.fillna(""))
+
+
+def save_items(df):
+    write_sheet("order_items", df.fillna(""))
+
+
+def gen_order_no(orders_df):
+    today = today_str()
+    seq = int((orders_df["order_date"] == today).sum()) + 1 if not orders_df.empty else 1
+    return f"{date.today().strftime('%Y%m%d')}-{seq:03d}"
+
+
+def gen_next_item_id(items_df):
+    return 1 if items_df.empty else int(items_df["item_id"].max()) + 1
+
+
+def item_label_text(row):
+    brand = safe_str(row.get("brand"))
+    model = safe_str(row.get("model"))
+    color = safe_str(row.get("color"))
+    size = safe_str(row.get("size"))
+    item = " ".join([x for x in [brand, model] if x]).strip()
+    spec = " / ".join([x for x in [color, size] if x])
     if item and spec:
         return f"{item} / {spec}"
     return item or spec
 
 
-def grouped_label_text(customer_name: str, items_df: pd.DataFrame, max_lines: int = 6) -> str:
-    lines = [customer_name.strip()]
+def grouped_label_text(customer_name, items_df, max_lines=6):
+    lines = [safe_str(customer_name)]
     item_lines = [item_label_text(r) for _, r in items_df.iterrows() if item_label_text(r)]
     if len(item_lines) > max_lines:
-        shown = item_lines[:max_lines]
-        shown.append(f"+{len(item_lines) - max_lines} more")
-        item_lines = shown
+        item_lines = item_lines[:max_lines] + [f"+{len(item_lines) - max_lines} more"]
     lines.extend(item_lines)
     return "\n".join(lines)
 
 
-def download_df(df: pd.DataFrame, filename: str, label: str):
+def combine_data():
+    orders = load_orders()
+    items = load_items()
+    if orders.empty or items.empty:
+        return pd.DataFrame(columns=[
+            "order_no", "order_date", "customer_name", "source", "remark", "item_id", "brand",
+            "model", "color", "size", "qty", "reserved", "purchased", "purchase_store",
+            "purchase_date", "arrived", "arrival_date", "printed", "shipped",
+            "shipped_date", "tracking_no", "note"
+        ])
+    df = items.merge(orders, on="order_no", how="left")
+    base = ["order_no", "order_date", "customer_name", "source", "remark"]
+    others = [c for c in df.columns if c not in base]
+    return df[base + others].fillna("")
+
+
+def fetch_dashboard_metrics(df):
+    if df.empty:
+        return {"待采购": 0, "已采购未到货": 0, "已到货待发货": 0, "今日已发货": 0}
+    today = today_str()
+    return {
+        "待采购": int(((df["reserved"] == 1) & (df["purchased"] == 0)).sum()),
+        "已采购未到货": int(((df["purchased"] == 1) & (df["arrived"] == 0)).sum()),
+        "已到货待发货": int(((df["arrived"] == 1) & (df["shipped"] == 0)).sum()),
+        "今日已发货": int(((df["shipped"] == 1) & (df["shipped_date"].astype(str) == today)).sum()),
+    }
+
+
+def download_df(df, filename, label):
     st.download_button(
         label=label,
         data=df.to_csv(index=False).encode("utf-8-sig"),
@@ -139,89 +178,9 @@ def download_df(df: pd.DataFrame, filename: str, label: str):
     )
 
 
-def badge(text: str, color: str = "#EDEDED"):
-    st.markdown(
-        f"""
-        <span style="
-            background:{color};
-            padding:4px 10px;
-            border-radius:999px;
-            font-size:12px;
-            display:inline-block;
-            margin-right:6px;
-        ">{text}</span>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-# -----------------------------
-# Load data
-# -----------------------------
-def fetch_order_items() -> pd.DataFrame:
-    sql = """
-    SELECT
-        oi.id AS item_id,
-        o.id AS order_id,
-        o.order_no,
-        o.order_date,
-        o.customer_name,
-        o.source,
-        o.remark,
-        oi.brand,
-        oi.model,
-        oi.color,
-        oi.size,
-        oi.qty,
-        oi.reserved,
-        oi.purchased,
-        oi.purchase_store,
-        oi.purchase_date,
-        oi.arrived,
-        oi.arrival_date,
-        oi.printed,
-        oi.shipped,
-        oi.shipped_date,
-        oi.tracking_no,
-        oi.note
-    FROM order_items oi
-    JOIN orders o ON oi.order_id = o.id
-    ORDER BY o.order_date DESC, o.id DESC, oi.id DESC
-    """
-    df = run_query(sql)
-    if df.empty:
-        return df
-    bool_cols = ["reserved", "purchased", "arrived", "printed", "shipped"]
-    for c in bool_cols:
-        df[c] = df[c].astype(int)
-    return df
-
-
-def fetch_dashboard_metrics(df: pd.DataFrame):
-    if df.empty:
-        return {
-            "待采购": 0,
-            "已采购未到货": 0,
-            "已到货待发货": 0,
-            "今日已发货": 0,
-        }
-
-    today = today_str()
-    return {
-        "待采购": int(((df["reserved"] == 1) & (df["purchased"] == 0)).sum()),
-        "已采购未到货": int(((df["purchased"] == 1) & (df["arrived"] == 0)).sum()),
-        "已到货待发货": int(((df["arrived"] == 1) & (df["shipped"] == 0)).sum()),
-        "今日已发货": int(((df["shipped"] == 1) & (df["shipped_date"] == today)).sum()),
-    }
-
-
-# -----------------------------
-# UI
-# -----------------------------
-def page_dashboard(df: pd.DataFrame):
+def page_dashboard(df):
     st.subheader("首页仪表盘")
     metrics = fetch_dashboard_metrics(df)
-
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("待采购", metrics["待采购"])
     c2.metric("已采购未到货", metrics["已采购未到货"])
@@ -232,45 +191,29 @@ def page_dashboard(df: pd.DataFrame):
     if df.empty:
         st.info("还没有订单，先去“订单录入”添加第一批数据。")
         return
-
     pending_ship = df[(df["arrived"] == 1) & (df["shipped"] == 0)]
     if pending_ship.empty:
         st.success("目前没有待发货商品。")
     else:
-        grouped = (
-            pending_ship.groupby("customer_name")
-            .size()
-            .reset_index(name="件数")
-            .sort_values("件数", ascending=False)
-        )
+        grouped = pending_ship.groupby("customer_name").size().reset_index(name="件数").sort_values("件数", ascending=False)
         st.dataframe(grouped, use_container_width=True, hide_index=True)
 
     st.markdown("### 最近 10 条商品记录")
-    preview_cols = [
-        "order_no", "customer_name", "brand", "model", "color", "size",
-        "purchase_store", "purchased", "arrived", "printed", "shipped"
-    ]
-    show = df[preview_cols].head(10).copy()
+    show = df[["order_no", "customer_name", "brand", "model", "color", "size", "purchase_store", "purchased", "arrived", "printed", "shipped"]].head(10).copy()
     st.dataframe(show, use_container_width=True, hide_index=True)
 
 
 def page_order_entry():
     st.subheader("订单录入")
-
     with st.form("order_form", clear_on_submit=True):
         c1, c2, c3 = st.columns([1.2, 1, 1.2])
         order_date = c1.date_input("下单日期", value=date.today())
         customer_name = c2.text_input("客户姓名")
         source = c3.selectbox("来源", ["微信", "淘宝", "得物", "官网", "其他"])
-
         remark = st.text_input("订单备注")
 
         st.markdown("#### 商品列表")
-        empty = pd.DataFrame(
-            [
-                {"品牌": "", "型号": "", "颜色": "", "尺寸": "", "数量": 1, "已预订": True, "备注": "", "采购店铺": ""}
-            ]
-        )
+        empty = pd.DataFrame([{"品牌": "", "型号": "", "颜色": "", "尺寸": "", "数量": 1, "已预订": True, "备注": "", "采购店铺": ""}])
         items = st.data_editor(
             empty,
             num_rows="dynamic",
@@ -282,63 +225,66 @@ def page_order_entry():
                 "已预订": st.column_config.CheckboxColumn(default=True),
             },
         )
-
         submitted = st.form_submit_button("保存订单", use_container_width=True)
-        if submitted:
-            if not customer_name.strip():
-                st.error("客户姓名不能为空。")
-                return
-            valid_rows = []
-            for _, row in items.iterrows():
-                if str(row.get("型号") or "").strip():
-                    valid_rows.append(row)
-            if not valid_rows:
-                st.error("至少填写一行商品型号。")
-                return
 
-            order_no = gen_order_no()
-            conn = get_conn()
-            cur = conn.cursor()
-            cur.execute(
-                "INSERT INTO orders (order_no, order_date, customer_name, source, remark) VALUES (?, ?, ?, ?, ?)",
-                (order_no, order_date.isoformat(), customer_name.strip(), source, remark.strip()),
-            )
-            order_id = cur.lastrowid
+    if submitted:
+        if not customer_name.strip():
+            st.error("客户姓名不能为空。")
+            return
 
-            item_params = []
-            for row in valid_rows:
-                item_params.append(
-                    (
-                        order_id,
-                        str(row.get("品牌") or "").strip(),
-                        str(row.get("型号") or "").strip(),
-                        str(row.get("颜色") or "").strip(),
-                        str(row.get("尺寸") or "").strip(),
-                        int(row.get("数量") or 1),
-                        1 if bool(row.get("已预订")) else 0,
-                        str(row.get("采购店铺") or "").strip(),
-                        str(row.get("备注") or "").strip(),
-                    )
-                )
-            cur.executemany(
-                """
-                INSERT INTO order_items
-                (order_id, brand, model, color, size, qty, reserved, purchase_store, note)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                item_params,
-            )
-            conn.commit()
-            conn.close()
-            st.success(f"订单已保存：{order_no}")
+        valid_rows = [row for _, row in items.iterrows() if safe_str(row.get("型号"))]
+        if not valid_rows:
+            st.error("至少填写一行商品型号。")
+            return
+
+        orders_df = load_orders()
+        items_df = load_items()
+        order_no = gen_order_no(orders_df)
+
+        new_order = pd.DataFrame([{
+            "order_no": order_no,
+            "order_date": order_date.isoformat(),
+            "customer_name": customer_name.strip(),
+            "source": source,
+            "remark": remark.strip(),
+            "created_at": now_str(),
+        }])
+        orders_df = pd.concat([orders_df, new_order], ignore_index=True)
+
+        next_id = gen_next_item_id(items_df)
+        rows = []
+        for row in valid_rows:
+            rows.append({
+                "item_id": next_id,
+                "order_no": order_no,
+                "brand": safe_str(row.get("品牌")),
+                "model": safe_str(row.get("型号")),
+                "color": safe_str(row.get("颜色")),
+                "size": safe_str(row.get("尺寸")),
+                "qty": safe_int(row.get("数量"), 1),
+                "reserved": 1 if bool(row.get("已预订")) else 0,
+                "purchased": 0,
+                "purchase_store": safe_str(row.get("采购店铺")),
+                "purchase_date": "",
+                "arrived": 0,
+                "arrival_date": "",
+                "printed": 0,
+                "shipped": 0,
+                "shipped_date": "",
+                "tracking_no": "",
+                "note": safe_str(row.get("备注")),
+            })
+            next_id += 1
+
+        items_df = pd.concat([items_df, pd.DataFrame(rows)], ignore_index=True)
+        save_orders(orders_df)
+        save_items(items_df)
+        st.success(f"订单已保存：{order_no}")
+        st.rerun()
 
 
-def page_purchase(df: pd.DataFrame):
+def page_purchase(df):
     st.subheader("采购清单")
-    if df.empty:
-        st.info("暂无数据。")
-        return
-
     purchase_df = df[(df["reserved"] == 1) & (df["purchased"] == 0)].copy()
     if purchase_df.empty:
         st.success("当前没有待采购商品。")
@@ -347,15 +293,13 @@ def page_purchase(df: pd.DataFrame):
     c1, c2 = st.columns([1.2, 1])
     group_by = c1.radio("分组方式", ["按店铺", "按品牌", "不分组"], horizontal=True)
     store_filter = c2.text_input("筛选店铺")
-
     if store_filter.strip():
         purchase_df = purchase_df[purchase_df["purchase_store"].fillna("").str.contains(store_filter.strip(), case=False)]
 
     display_cols = ["item_id", "order_no", "customer_name", "brand", "model", "color", "size", "qty", "purchase_store"]
     purchase_df["选择"] = False
-    editor_cols = ["选择"] + display_cols
     edited = st.data_editor(
-        purchase_df[editor_cols],
+        purchase_df[["选择"] + display_cols],
         use_container_width=True,
         hide_index=True,
         disabled=display_cols,
@@ -363,11 +307,9 @@ def page_purchase(df: pd.DataFrame):
     )
 
     if group_by == "按店铺":
-        st.markdown("#### 店铺分组概览")
         g = purchase_df.groupby("purchase_store", dropna=False).size().reset_index(name="件数").sort_values("件数", ascending=False)
         st.dataframe(g, use_container_width=True, hide_index=True)
     elif group_by == "按品牌":
-        st.markdown("#### 品牌分组概览")
         g = purchase_df.groupby("brand", dropna=False).size().reset_index(name="件数").sort_values("件数", ascending=False)
         st.dataframe(g, use_container_width=True, hide_index=True)
 
@@ -377,29 +319,21 @@ def page_purchase(df: pd.DataFrame):
         purchase_date = st.date_input("采购日期", value=date.today())
         submitted = st.form_submit_button("标记为已采购", use_container_width=True)
 
-        if submitted:
-            selected_ids = edited.loc[edited["选择"] == True, "item_id"].tolist()
-            if not selected_ids:
-                st.warning("先勾选要处理的商品。")
-                return
-            conn = get_conn()
-            cur = conn.cursor()
-            cur.executemany(
-                "UPDATE order_items SET purchased = 1, purchase_date = ? WHERE id = ?",
-                [(purchase_date.isoformat(), int(i)) for i in selected_ids],
-            )
-            conn.commit()
-            conn.close()
-            st.success(f"已标记 {len(selected_ids)} 件商品为已采购。")
-            st.rerun()
+    if submitted:
+        selected_ids = edited.loc[edited["选择"] == True, "item_id"].tolist()
+        if not selected_ids:
+            st.warning("先勾选要处理的商品。")
+            return
+        items_df = load_items()
+        items_df.loc[items_df["item_id"].isin(selected_ids), "purchased"] = 1
+        items_df.loc[items_df["item_id"].isin(selected_ids), "purchase_date"] = purchase_date.isoformat()
+        save_items(items_df)
+        st.success(f"已标记 {len(selected_ids)} 件商品为已采购。")
+        st.rerun()
 
 
-def page_arrival(df: pd.DataFrame):
+def page_arrival(df):
     st.subheader("到货登记")
-    if df.empty:
-        st.info("暂无数据。")
-        return
-
     arrival_df = df[(df["purchased"] == 1) & (df["arrived"] == 0)].copy()
     if arrival_df.empty:
         st.success("当前没有待到货商品。")
@@ -419,29 +353,21 @@ def page_arrival(df: pd.DataFrame):
         arrival_date = st.date_input("到货日期", value=date.today())
         submitted = st.form_submit_button("标记为已到货", use_container_width=True)
 
-        if submitted:
-            selected_ids = edited.loc[edited["选择"] == True, "item_id"].tolist()
-            if not selected_ids:
-                st.warning("先勾选要处理的商品。")
-                return
-            conn = get_conn()
-            cur = conn.cursor()
-            cur.executemany(
-                "UPDATE order_items SET arrived = 1, arrival_date = ? WHERE id = ?",
-                [(arrival_date.isoformat(), int(i)) for i in selected_ids],
-            )
-            conn.commit()
-            conn.close()
-            st.success(f"已标记 {len(selected_ids)} 件商品为已到货。")
-            st.rerun()
+    if submitted:
+        selected_ids = edited.loc[edited["选择"] == True, "item_id"].tolist()
+        if not selected_ids:
+            st.warning("先勾选要处理的商品。")
+            return
+        items_df = load_items()
+        items_df.loc[items_df["item_id"].isin(selected_ids), "arrived"] = 1
+        items_df.loc[items_df["item_id"].isin(selected_ids), "arrival_date"] = arrival_date.isoformat()
+        save_items(items_df)
+        st.success(f"已标记 {len(selected_ids)} 件商品为已到货。")
+        st.rerun()
 
 
-def page_labels(df: pd.DataFrame):
+def page_labels(df):
     st.subheader("标签打印")
-    if df.empty:
-        st.info("暂无数据。")
-        return
-
     ready_df = df[(df["arrived"] == 1) & (df["shipped"] == 0)].copy()
     if ready_df.empty:
         st.success("当前没有可打印标签的商品。")
@@ -450,12 +376,8 @@ def page_labels(df: pd.DataFrame):
     mode = st.radio("标签模式", ["同客户合并标签", "单件标签"], horizontal=True)
 
     if mode == "单件标签":
-        ready_df["标签内容"] = ready_df.apply(
-            lambda r: f"{r['customer_name']}\n{item_label_text(r)}",
-            axis=1
-        )
-        show_cols = ["item_id", "order_no", "customer_name", "brand", "model", "color", "size", "标签内容"]
-        st.dataframe(ready_df[show_cols], use_container_width=True, hide_index=True)
+        ready_df["标签内容"] = ready_df.apply(lambda r: f"{r['customer_name']}\n{item_label_text(r)}", axis=1)
+        st.dataframe(ready_df[["item_id", "order_no", "customer_name", "brand", "model", "color", "size", "标签内容"]], use_container_width=True, hide_index=True)
 
         selected_item = st.selectbox(
             "选择一件商品查看标签",
@@ -468,21 +390,20 @@ def page_labels(df: pd.DataFrame):
         st.code(label_text)
 
         if st.button("标记此商品已打印", use_container_width=True):
-            execute("UPDATE order_items SET printed = 1 WHERE id = ?", (int(selected_item),))
+            items_df = load_items()
+            items_df.loc[items_df["item_id"] == int(selected_item), "printed"] = 1
+            save_items(items_df)
             st.success("已标记为已打印。")
             st.rerun()
-
     else:
         grouped_records = []
         for customer_name, g in ready_df.groupby("customer_name", sort=False):
-            grouped_records.append(
-                {
-                    "客户姓名": customer_name,
-                    "商品数": len(g),
-                    "标签内容": grouped_label_text(customer_name, g),
-                    "item_ids": ",".join([str(x) for x in g["item_id"].tolist()]),
-                }
-            )
+            grouped_records.append({
+                "客户姓名": customer_name,
+                "商品数": len(g),
+                "标签内容": grouped_label_text(customer_name, g),
+                "item_ids": ",".join([str(x) for x in g["item_id"].tolist()]),
+            })
         grouped_df = pd.DataFrame(grouped_records)
         st.dataframe(grouped_df[["客户姓名", "商品数", "标签内容"]], use_container_width=True, hide_index=True)
         download_df(grouped_df[["客户姓名", "商品数", "标签内容"]], "合并标签内容.csv", "下载合并标签 CSV")
@@ -490,27 +411,20 @@ def page_labels(df: pd.DataFrame):
         selected_customer = st.selectbox("选择客户查看标签", grouped_df["客户姓名"].tolist())
         label_text = grouped_df.loc[grouped_df["客户姓名"] == selected_customer, "标签内容"].iloc[0]
         item_ids_str = grouped_df.loc[grouped_df["客户姓名"] == selected_customer, "item_ids"].iloc[0]
-
         st.text_area("标签内容", value=label_text, height=200)
         st.code(label_text)
 
         if st.button("标记该客户商品已打印", use_container_width=True):
             ids = [int(x) for x in item_ids_str.split(",") if x]
-            conn = get_conn()
-            cur = conn.cursor()
-            cur.executemany("UPDATE order_items SET printed = 1 WHERE id = ?", [(i,) for i in ids])
-            conn.commit()
-            conn.close()
+            items_df = load_items()
+            items_df.loc[items_df["item_id"].isin(ids), "printed"] = 1
+            save_items(items_df)
             st.success(f"已标记 {len(ids)} 件商品为已打印。")
             st.rerun()
 
 
-def page_shipping(df: pd.DataFrame):
+def page_shipping(df):
     st.subheader("发货登记")
-    if df.empty:
-        st.info("暂无数据。")
-        return
-
     ship_df = df[(df["arrived"] == 1) & (df["shipped"] == 0)].copy()
     if ship_df.empty:
         st.success("当前没有待发货商品。")
@@ -531,21 +445,18 @@ def page_shipping(df: pd.DataFrame):
             shipped_date = c2.date_input("发货日期", value=date.today())
             submitted = st.form_submit_button("标记为已发货", use_container_width=True)
 
-            if submitted:
-                selected_ids = edited.loc[edited["选择"] == True, "item_id"].tolist()
-                if not selected_ids:
-                    st.warning("先勾选要发货的商品。")
-                    return
-                conn = get_conn()
-                cur = conn.cursor()
-                cur.executemany(
-                    "UPDATE order_items SET shipped = 1, shipped_date = ?, tracking_no = ? WHERE id = ?",
-                    [(shipped_date.isoformat(), tracking_no.strip(), int(i)) for i in selected_ids],
-                )
-                conn.commit()
-                conn.close()
-                st.success(f"已标记 {len(selected_ids)} 件商品为已发货。")
-                st.rerun()
+        if submitted:
+            selected_ids = edited.loc[edited["选择"] == True, "item_id"].tolist()
+            if not selected_ids:
+                st.warning("先勾选要发货的商品。")
+                return
+            items_df = load_items()
+            items_df.loc[items_df["item_id"].isin(selected_ids), "shipped"] = 1
+            items_df.loc[items_df["item_id"].isin(selected_ids), "shipped_date"] = shipped_date.isoformat()
+            items_df.loc[items_df["item_id"].isin(selected_ids), "tracking_no"] = tracking_no.strip()
+            save_items(items_df)
+            st.success(f"已标记 {len(selected_ids)} 件商品为已发货。")
+            st.rerun()
 
     st.markdown("### 历史发货记录")
     history = df[df["shipped"] == 1].copy()
@@ -557,7 +468,7 @@ def page_shipping(df: pd.DataFrame):
         download_df(history[show_cols], "发货记录.csv", "下载发货记录 CSV")
 
 
-def page_data(df: pd.DataFrame):
+def page_data(df):
     st.subheader("数据总览 / 维护")
     if df.empty:
         st.info("暂无数据。")
@@ -567,81 +478,66 @@ def page_data(df: pd.DataFrame):
 
     st.markdown("### 快速操作")
     if st.button("生成示例数据", use_container_width=True):
-        conn = get_conn()
-        cur = conn.cursor()
+        orders_df = load_orders()
+        items_df = load_items()
+        base_order_no = gen_order_no(orders_df)
+        orders_df = pd.concat([orders_df, pd.DataFrame([
+            {"order_no": base_order_no, "order_date": today_str(), "customer_name": "黄导", "source": "微信", "remark": "示例订单", "created_at": now_str()},
+            {"order_no": base_order_no + "-B", "order_date": today_str(), "customer_name": "蔡子立", "source": "淘宝", "remark": "示例订单", "created_at": now_str()},
+        ])], ignore_index=True)
 
-        base_order_no = gen_order_no()
-        orders = [
-            (base_order_no, today_str(), "黄导", "微信", "示例订单"),
-            (base_order_no + "-B", today_str(), "蔡子立", "淘宝", "示例订单"),
-        ]
-        inserted_order_ids = []
-        for order_no, order_date, customer, source, remark in orders:
-            cur.execute(
-                "INSERT INTO orders (order_no, order_date, customer_name, source, remark) VALUES (?, ?, ?, ?, ?)",
-                (order_no, order_date, customer, source, remark),
-            )
-            inserted_order_ids.append(cur.lastrowid)
+        next_id = gen_next_item_id(items_df)
+        items_df = pd.concat([items_df, pd.DataFrame([
+            {"item_id": next_id, "order_no": base_order_no, "brand": "KUSHITANI", "model": "K-2440", "color": "黑黄", "size": "XL", "qty": 1, "reserved": 1, "purchased": 1, "purchase_store": "南海部品", "purchase_date": today_str(), "arrived": 1, "arrival_date": today_str(), "printed": 0, "shipped": 0, "shipped_date": "", "tracking_no": "", "note": "示例"},
+            {"item_id": next_id + 1, "order_no": base_order_no, "brand": "56design", "model": "联名外套", "color": "绿色", "size": "LL", "qty": 1, "reserved": 1, "purchased": 1, "purchase_store": "Webike", "purchase_date": today_str(), "arrived": 1, "arrival_date": today_str(), "printed": 0, "shipped": 0, "shipped_date": "", "tracking_no": "", "note": "示例"},
+            {"item_id": next_id + 2, "order_no": base_order_no + "-B", "brand": "KUSHITANI", "model": "K-1366", "color": "黑色", "size": "32", "qty": 1, "reserved": 1, "purchased": 0, "purchase_store": "南海部品", "purchase_date": "", "arrived": 0, "arrival_date": "", "printed": 0, "shipped": 0, "shipped_date": "", "tracking_no": "", "note": "示例"},
+        ])], ignore_index=True)
 
-        sample_items = [
-            (inserted_order_ids[0], "KUSHITANI", "K-2440", "黑黄", "XL", 1, 1, 1, "南海部品", today_str(), 1, today_str(), 0, 0, "", "示例"),
-            (inserted_order_ids[0], "56design", "联名外套", "绿色", "LL", 1, 1, 1, "Webike", today_str(), 1, today_str(), 0, 0, "", "示例"),
-            (inserted_order_ids[1], "KUSHITANI", "K-1366", "黑色", "32", 1, 1, 0, "南海部品", "", 0, "", 0, 0, "", "示例"),
-        ]
-        cur.executemany(
-            """
-            INSERT INTO order_items
-            (order_id, brand, model, color, size, qty, reserved, purchased, purchase_store,
-             purchase_date, arrived, arrival_date, printed, shipped, tracking_no, note)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            sample_items,
-        )
-        conn.commit()
-        conn.close()
-        st.success("示例数据已生成。")
+        save_orders(orders_df)
+        save_items(items_df)
+        st.success("示例数据已生成到 Google Sheet。")
         st.rerun()
 
     if st.button("清空全部数据（危险）", use_container_width=True, type="secondary"):
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("DELETE FROM order_items")
-        cur.execute("DELETE FROM orders")
-        conn.commit()
-        conn.close()
-        st.warning("已清空全部数据。")
+        save_orders(pd.DataFrame(columns=["order_no", "order_date", "customer_name", "source", "remark", "created_at"]))
+        save_items(pd.DataFrame(columns=[
+            "item_id", "order_no", "brand", "model", "color", "size", "qty", "reserved",
+            "purchased", "purchase_store", "purchase_date", "arrived", "arrival_date",
+            "printed", "shipped", "shipped_date", "tracking_no", "note"
+        ]))
+        st.warning("Google Sheet 中的数据已清空。")
         st.rerun()
 
 
 def main():
-    st.set_page_config(
-        page_title="果熊采购发货系统",
-        page_icon="📦",
-        layout="wide",
+    st.set_page_config(page_title="果熊采购发货系统", page_icon="📦", layout="wide")
+    st.markdown(
+        '''
+        <style>
+            .block-container {padding-top: 1.2rem; padding-bottom: 3rem;}
+            div[data-testid="metric-container"] {
+                border: 1px solid rgba(49, 51, 63, 0.12);
+                border-radius: 18px;
+                padding: 14px 16px;
+            }
+        </style>
+        ''',
+        unsafe_allow_html=True,
     )
-
-    init_db()
-
-    st.markdown("""
-    <style>
-        .block-container {padding-top: 1.2rem; padding-bottom: 3rem;}
-        div[data-testid="metric-container"] {
-            border: 1px solid rgba(49, 51, 63, 0.12);
-            border-radius: 18px;
-            padding: 14px 16px;
-        }
-    </style>
-    """, unsafe_allow_html=True)
 
     st.title("果熊采购发货系统")
     st.caption("订单录入 → 采购清单 → 到货登记 → 标签打印 → 发货登记")
+    st.caption("当前数据源：Google Sheet（持久保存版）")
 
-    page = st.sidebar.radio(
-        "导航",
-        ["首页", "订单录入", "采购清单", "到货登记", "标签打印", "发货登记", "数据总览"],
-    )
+    try:
+        ensure_sheets()
+        df = combine_data()
+    except Exception as e:
+        st.error("Google Sheet 连接失败，请检查 Secrets 和共享权限。")
+        st.exception(e)
+        st.stop()
 
-    df = fetch_order_items()
+    page = st.sidebar.radio("导航", ["首页", "订单录入", "采购清单", "到货登记", "标签打印", "发货登记", "数据总览"])
 
     with st.sidebar:
         st.markdown("---")
@@ -664,7 +560,7 @@ def main():
         page_labels(df)
     elif page == "发货登记":
         page_shipping(df)
-    elif page == "数据总览":
+    else:
         page_data(df)
 
 
