@@ -3,7 +3,8 @@ import pandas as pd
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1r6oBLOzvPPCD2wc_epjH3YgV9Vx74X4sxGqZuDTQnsw/edit?usp=sharing"
+# 直接用 Spreadsheet ID，避免反复解析 URL
+SPREADSHEET_ID = "1r6oBLOzvPPCD2wc_epjH3YgV9Vx74X4sxGqZuDTQnsw"
 
 
 @st.cache_resource
@@ -11,12 +12,11 @@ def get_conn():
     return st.connection("gsheets", type=GSheetsConnection)
 
 
+# 关键优化1：给读取结果加缓存，切页不再每次都打 Google API
+@st.cache_data(ttl=60)
 def read_sheet(worksheet: str) -> pd.DataFrame:
     conn = get_conn()
-    try:
-        df = conn.read(spreadsheet=SPREADSHEET_URL, worksheet=worksheet, ttl=0)
-    except Exception:
-        return pd.DataFrame()
+    df = conn.read(spreadsheet=SPREADSHEET_ID, worksheet=worksheet, ttl=60)
     if df is None:
         return pd.DataFrame()
     return pd.DataFrame(df)
@@ -24,29 +24,9 @@ def read_sheet(worksheet: str) -> pd.DataFrame:
 
 def write_sheet(worksheet: str, df: pd.DataFrame):
     conn = get_conn()
-    conn.update(spreadsheet=SPREADSHEET_URL, worksheet=worksheet, data=df)
-
-
-def ensure_sheets():
-    orders_cols = ["order_no", "order_date", "customer_name", "source", "remark", "created_at"]
-    items_cols = [
-        "item_id", "order_no", "brand", "model", "color", "size", "qty", "reserved",
-        "purchased", "purchase_store", "purchase_date", "arrived", "arrival_date",
-        "printed", "shipped", "shipped_date", "tracking_no", "note"
-    ]
-    settings_cols = ["key", "value"]
-
-    orders = read_sheet("orders")
-    if orders.empty or list(orders.columns) != orders_cols:
-        write_sheet("orders", pd.DataFrame(columns=orders_cols))
-
-    items = read_sheet("order_items")
-    if items.empty or list(items.columns) != items_cols:
-        write_sheet("order_items", pd.DataFrame(columns=items_cols))
-
-    settings = read_sheet("settings")
-    if settings.empty or list(settings.columns) != settings_cols:
-        write_sheet("settings", pd.DataFrame(columns=settings_cols))
+    conn.update(spreadsheet=SPREADSHEET_ID, worksheet=worksheet, data=df)
+    # 关键优化2：写入后再清缓存，保证读到最新数据
+    read_sheet.clear()
 
 
 def today_str():
@@ -140,7 +120,8 @@ def grouped_label_text(customer_name, items_df, max_lines=6):
     return "\n".join(lines)
 
 
-def combine_data():
+@st.cache_data(ttl=60)
+def combine_data_cached(_orders_key: str, _items_key: str):
     orders = load_orders()
     items = load_items()
     if orders.empty or items.empty:
@@ -154,6 +135,11 @@ def combine_data():
     base = ["order_no", "order_date", "customer_name", "source", "remark"]
     others = [c for c in df.columns if c not in base]
     return df[base + others].fillna("")
+
+
+def combine_data():
+    # 用列名作为轻量参数，只是为了让 cache_data 可调用
+    return combine_data_cached("orders", "items")
 
 
 def fetch_dashboard_metrics(df):
@@ -197,10 +183,6 @@ def page_dashboard(df):
     else:
         grouped = pending_ship.groupby("customer_name").size().reset_index(name="件数").sort_values("件数", ascending=False)
         st.dataframe(grouped, use_container_width=True, hide_index=True)
-
-    st.markdown("### 最近 10 条商品记录")
-    show = df[["order_no", "customer_name", "brand", "model", "color", "size", "purchase_store", "purchased", "arrived", "printed", "shipped"]].head(10).copy()
-    st.dataframe(show, use_container_width=True, hide_index=True)
 
 
 def page_order_entry():
@@ -279,6 +261,7 @@ def page_order_entry():
         items_df = pd.concat([items_df, pd.DataFrame(rows)], ignore_index=True)
         save_orders(orders_df)
         save_items(items_df)
+        combine_data_cached.clear()
         st.success(f"订单已保存：{order_no}")
         st.rerun()
 
@@ -313,8 +296,6 @@ def page_purchase(df):
         g = purchase_df.groupby("brand", dropna=False).size().reset_index(name="件数").sort_values("件数", ascending=False)
         st.dataframe(g, use_container_width=True, hide_index=True)
 
-    download_df(purchase_df[display_cols], "采购清单.csv", "下载采购清单 CSV")
-
     with st.form("mark_purchased_form"):
         purchase_date = st.date_input("采购日期", value=date.today())
         submitted = st.form_submit_button("标记为已采购", use_container_width=True)
@@ -328,6 +309,7 @@ def page_purchase(df):
         items_df.loc[items_df["item_id"].isin(selected_ids), "purchased"] = 1
         items_df.loc[items_df["item_id"].isin(selected_ids), "purchase_date"] = purchase_date.isoformat()
         save_items(items_df)
+        combine_data_cached.clear()
         st.success(f"已标记 {len(selected_ids)} 件商品为已采购。")
         st.rerun()
 
@@ -362,6 +344,7 @@ def page_arrival(df):
         items_df.loc[items_df["item_id"].isin(selected_ids), "arrived"] = 1
         items_df.loc[items_df["item_id"].isin(selected_ids), "arrival_date"] = arrival_date.isoformat()
         save_items(items_df)
+        combine_data_cached.clear()
         st.success(f"已标记 {len(selected_ids)} 件商品为已到货。")
         st.rerun()
 
@@ -385,14 +368,14 @@ def page_labels(df):
             format_func=lambda x: f"{x} | {ready_df.loc[ready_df['item_id'] == x, 'customer_name'].iloc[0]} | {ready_df.loc[ready_df['item_id'] == x, 'model'].iloc[0]}",
         )
         row = ready_df[ready_df["item_id"] == selected_item].iloc[0]
-        label_text = row["标签内容"]
-        st.text_area("标签内容", value=label_text, height=140)
-        st.code(label_text)
+        st.text_area("标签内容", value=row["标签内容"], height=140)
+        st.code(row["标签内容"])
 
         if st.button("标记此商品已打印", use_container_width=True):
             items_df = load_items()
             items_df.loc[items_df["item_id"] == int(selected_item), "printed"] = 1
             save_items(items_df)
+            combine_data_cached.clear()
             st.success("已标记为已打印。")
             st.rerun()
     else:
@@ -406,7 +389,6 @@ def page_labels(df):
             })
         grouped_df = pd.DataFrame(grouped_records)
         st.dataframe(grouped_df[["客户姓名", "商品数", "标签内容"]], use_container_width=True, hide_index=True)
-        download_df(grouped_df[["客户姓名", "商品数", "标签内容"]], "合并标签内容.csv", "下载合并标签 CSV")
 
         selected_customer = st.selectbox("选择客户查看标签", grouped_df["客户姓名"].tolist())
         label_text = grouped_df.loc[grouped_df["客户姓名"] == selected_customer, "标签内容"].iloc[0]
@@ -419,6 +401,7 @@ def page_labels(df):
             items_df = load_items()
             items_df.loc[items_df["item_id"].isin(ids), "printed"] = 1
             save_items(items_df)
+            combine_data_cached.clear()
             st.success(f"已标记 {len(ids)} 件商品为已打印。")
             st.rerun()
 
@@ -455,17 +438,9 @@ def page_shipping(df):
             items_df.loc[items_df["item_id"].isin(selected_ids), "shipped_date"] = shipped_date.isoformat()
             items_df.loc[items_df["item_id"].isin(selected_ids), "tracking_no"] = tracking_no.strip()
             save_items(items_df)
+            combine_data_cached.clear()
             st.success(f"已标记 {len(selected_ids)} 件商品为已发货。")
             st.rerun()
-
-    st.markdown("### 历史发货记录")
-    history = df[df["shipped"] == 1].copy()
-    if history.empty:
-        st.info("暂无历史发货记录。")
-    else:
-        show_cols = ["order_no", "customer_name", "brand", "model", "color", "size", "tracking_no", "shipped_date"]
-        st.dataframe(history[show_cols], use_container_width=True, hide_index=True)
-        download_df(history[show_cols], "发货记录.csv", "下载发货记录 CSV")
 
 
 def page_data(df):
@@ -474,9 +449,7 @@ def page_data(df):
         st.info("暂无数据。")
     else:
         st.dataframe(df, use_container_width=True, hide_index=True)
-        download_df(df, "全部订单商品数据.csv", "下载全部数据 CSV")
 
-    st.markdown("### 快速操作")
     if st.button("生成示例数据", use_container_width=True):
         orders_df = load_orders()
         items_df = load_items()
@@ -495,6 +468,7 @@ def page_data(df):
 
         save_orders(orders_df)
         save_items(items_df)
+        combine_data_cached.clear()
         st.success("示例数据已生成到 Google Sheet。")
         st.rerun()
 
@@ -505,6 +479,7 @@ def page_data(df):
             "purchased", "purchase_store", "purchase_date", "arrived", "arrival_date",
             "printed", "shipped", "shipped_date", "tracking_no", "note"
         ]))
+        combine_data_cached.clear()
         st.warning("Google Sheet 中的数据已清空。")
         st.rerun()
 
@@ -527,13 +502,14 @@ def main():
 
     st.title("果熊采购发货系统")
     st.caption("订单录入 → 采购清单 → 到货登记 → 标签打印 → 发货登记")
-    st.caption("当前数据源：Google Sheet（持久保存版）")
+    st.caption("当前数据源：Google Sheet（持久保存版｜速度优化版）")
 
     try:
-        ensure_sheets()
+        # 关键优化3：不再每次打开页面都跑 ensure_sheets()
+        # 你已经手动建好了 orders / order_items / settings 三张表，所以这里直接读
         df = combine_data()
     except Exception as e:
-        st.error("Google Sheet 连接失败，请检查 Secrets 和共享权限。")
+        st.error("Google Sheet 连接失败，请检查 Secrets、共享权限，或稍后再试。")
         st.exception(e)
         st.stop()
 
