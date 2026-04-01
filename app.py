@@ -73,12 +73,34 @@ def item_label_text(row):
     return item or spec
 
 
-def grouped_label_text(customer_name, items_df, max_lines=6):
+def grouped_label_text(customer_name, items_df, max_lines=4):
+    """
+    70x40 标签紧凑版：
+    1 行客户名 + 最多 3 行商品信息
+    """
     lines = [safe_str(customer_name)]
-    item_lines = [item_label_text(r) for _, r in items_df.iterrows() if item_label_text(r)]
-    if len(item_lines) > max_lines:
-        item_lines = item_lines[:max_lines] + [f"+{len(item_lines) - max_lines} more"]
-    lines.extend(item_lines)
+
+    compact_lines = []
+    for _, row in items_df.iterrows():
+        brand = safe_str(row.get("brand"))
+        model = safe_str(row.get("model"))
+        color = safe_str(row.get("color"))
+        size = safe_str(row.get("size"))
+        qty = safe_int(row.get("qty"), 1)
+
+        main = " ".join([x for x in [brand, model] if x]).strip()
+        spec = " / ".join([x for x in [color, size] if x])
+
+        if main:
+            compact_lines.append(main)
+        if spec:
+            compact_lines.append(f"{spec} ×{qty}")
+
+    # 70x40 不适合太多内容：客户名占 1 行，商品最多再占 3 行
+    if len(compact_lines) > max_lines - 1:
+        compact_lines = compact_lines[:max_lines - 1]
+
+    lines.extend(compact_lines)
     return "\n".join(lines)
 
 
@@ -424,32 +446,52 @@ def page_labels(df):
             st.rerun()
 
     else:
+        st.markdown("### 70×40 标签预览")
+
         grouped_records = []
         for customer_name, g in ready_df.groupby("customer_name", sort=False):
+            label_text = grouped_label_text(customer_name, g, max_lines=4)
             grouped_records.append({
                 "客户姓名": customer_name,
                 "商品数": len(g),
-                "标签内容": grouped_label_text(customer_name, g),
+                "标签内容": label_text,
                 "item_ids": ",".join([str(x) for x in g["item_id"].tolist()]),
             })
 
         grouped_df = pd.DataFrame(grouped_records)
-        st.dataframe(grouped_df[["客户姓名", "商品数", "标签内容"]], use_container_width=True, hide_index=True)
 
-        selected_customer = st.selectbox("选择客户查看标签", grouped_df["客户姓名"].tolist())
-        label_text = grouped_df.loc[grouped_df["客户姓名"] == selected_customer, "标签内容"].iloc[0]
-        item_ids_str = grouped_df.loc[grouped_df["客户姓名"] == selected_customer, "item_ids"].iloc[0]
+        if grouped_df.empty:
+            st.info("当前没有可生成的标签。")
+            return
 
-        st.text_area("标签内容", value=label_text, height=200)
-        st.code(label_text)
+        for i, row in grouped_df.iterrows():
+            with st.container(border=True):
+                c1, c2 = st.columns([3, 1])
 
-        if st.button("标记该客户商品已打印", use_container_width=True):
-            ids = [int(x) for x in item_ids_str.split(",") if x]
-            items_df = load_items()
-            items_df.loc[items_df["item_id"].isin(ids), "printed"] = 1
-            save_items(items_df)
-            st.success(f"已标记 {len(ids)} 件商品为已打印。")
-            st.rerun()
+                with c1:
+                    st.markdown(f"**{row['客户姓名']}**")
+                    st.text_area(
+                        f"标签内容_{i}",
+                        value=row["标签内容"],
+                        height=110,
+                        key=f"label_preview_{i}"
+                    )
+
+                with c2:
+                    st.write(f"商品数：{row['商品数']}")
+                    if st.button("标记已打印", key=f"mark_printed_{i}", use_container_width=True):
+                        ids = [int(x) for x in row["item_ids"].split(",") if x]
+                        items_df = load_items()
+                        items_df.loc[items_df["item_id"].isin(ids), "printed"] = 1
+                        save_items(items_df)
+                        st.success(f"{row['客户姓名']} 已标记打印")
+                        st.rerun()
+
+        download_df(
+            grouped_df[["客户姓名", "商品数", "标签内容"]],
+            "70x40标签内容.csv",
+            "下载 70×40 标签内容 CSV"
+        )
 
 
 def page_shipping(df):
