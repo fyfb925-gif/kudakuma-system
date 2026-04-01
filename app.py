@@ -18,7 +18,7 @@ def get_conn():
 def read_sheet(worksheet: str) -> pd.DataFrame:
     conn = get_conn()
     try:
-        df = conn.read(worksheet=worksheet, ttl="10m")
+        df = conn.read(worksheet=worksheet, ttl="0")
         if df is None:
             return pd.DataFrame()
         return pd.DataFrame(df)
