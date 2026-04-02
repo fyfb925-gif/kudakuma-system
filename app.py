@@ -28,8 +28,10 @@ def read_sheet(worksheet: str) -> pd.DataFrame:
 def write_sheet(worksheet: str, df: pd.DataFrame):
     conn = get_conn()
     conn.update(worksheet=worksheet, data=df)
-    read_sheet.clear()
-    combine_data.clear()
+    try:
+        read_sheet.clear()
+    except Exception:
+        pass
 
 
 # =========================
@@ -112,6 +114,7 @@ def grouped_product_text(items_df):
 
     return "\n".join(lines)
 
+
 # =========================
 # 数据加载
 # =========================
@@ -163,9 +166,24 @@ def save_items(df):
 
 
 def gen_order_no(orders_df):
-    today = today_str()
-    seq = int((orders_df["order_date"] == today).sum()) + 1 if not orders_df.empty else 1
-    return f"{date.today().strftime('%Y%m%d')}-{seq:03d}"
+    prefix = date.today().strftime("%Y%m%d")
+
+    if orders_df.empty or "order_no" not in orders_df.columns:
+        return f"{prefix}-001"
+
+    order_nos = orders_df["order_no"].astype(str).str.strip()
+    today_nos = order_nos[order_nos.str.startswith(prefix + "-")]
+
+    if today_nos.empty:
+        return f"{prefix}-001"
+
+    seqs = pd.to_numeric(
+        today_nos.str.extract(rf"^{prefix}-(\d+)$")[0],
+        errors="coerce"
+    ).dropna()
+
+    next_seq = int(seqs.max()) + 1 if not seqs.empty else 1
+    return f"{prefix}-{next_seq:03d}"
 
 
 def gen_next_item_id(items_df):
@@ -174,21 +192,20 @@ def gen_next_item_id(items_df):
     return int(items_df["item_id"].max()) + 1
 
 
-@st.cache_data(ttl="10m")
 def combine_data():
     orders = load_orders()
     items = load_items()
 
     if orders.empty or items.empty:
         return pd.DataFrame(columns=[
-    "order_no", "order_date", "customer_name", "source", "remark",
-    "item_id", "brand", "model", "color", "size", "qty", "reserved",
-    "purchased", "purchase_store", "purchase_date", "arrived",
-    "arrival_date", "printed", "shipped", "shipped_date",
-    "tracking_no", "note", "order_status", "cancel_reason", "cancelled_at"
-])
+            "order_no", "order_date", "customer_name", "source", "remark",
+            "item_id", "brand", "model", "color", "size", "qty", "reserved",
+            "purchased", "purchase_store", "purchase_date", "arrived",
+            "arrival_date", "printed", "shipped", "shipped_date",
+            "tracking_no", "note", "order_status", "cancel_reason", "cancelled_at"
+        ])
 
-    # 关键修复：统一 order_no 格式
+    # 统一 order_no 格式
     orders["order_no"] = orders["order_no"].astype(str).str.strip()
     items["order_no"] = items["order_no"].astype(str).str.strip()
 
@@ -261,7 +278,7 @@ def page_dashboard(df):
         (df["shipped"] == 0) &
         (df["order_status"] != "cancelled")
     ]
-    
+
     if pending_ship.empty:
         st.success("目前没有待发货商品。")
     else:
@@ -318,6 +335,10 @@ def page_order_entry():
 
         order_no = gen_order_no(orders_df)
 
+        if order_no in orders_df["order_no"].astype(str).str.strip().tolist():
+            st.error(f"订单号重复：{order_no}，请重试一次。")
+            return
+
         new_order = pd.DataFrame([{
             "order_no": order_no,
             "order_date": order_date.isoformat(),
@@ -360,6 +381,7 @@ def page_order_entry():
 
         save_orders(orders_df)
         save_items(items_df)
+        st.cache_data.clear()
         st.success(f"订单已保存：{order_no}")
         st.rerun()
 
@@ -367,10 +389,10 @@ def page_order_entry():
 def page_purchase(df):
     st.subheader("采购清单")
     purchase_df = df[
-    (df["reserved"] == 1) &
-    (df["purchased"] == 0) &
-    (df["order_status"] != "cancelled")
-].copy()
+        (df["reserved"] == 1) &
+        (df["purchased"] == 0) &
+        (df["order_status"] != "cancelled")
+    ].copy()
 
     if purchase_df.empty:
         st.success("当前没有待采购商品。")
@@ -401,6 +423,7 @@ def page_purchase(df):
         items_df.loc[items_df["item_id"].isin(selected_ids), "purchased"] = 1
         items_df.loc[items_df["item_id"].isin(selected_ids), "purchase_date"] = purchase_date.isoformat()
         save_items(items_df)
+        st.cache_data.clear()
         st.success(f"已标记 {len(selected_ids)} 件商品为已采购。")
         st.rerun()
 
@@ -408,10 +431,10 @@ def page_purchase(df):
 def page_arrival(df):
     st.subheader("到货登记")
     arrival_df = df[
-    (df["purchased"] == 1) &
-    (df["arrived"] == 0) &
-    (df["order_status"] != "cancelled")
-].copy()
+        (df["purchased"] == 1) &
+        (df["arrived"] == 0) &
+        (df["order_status"] != "cancelled")
+    ].copy()
 
     if arrival_df.empty:
         st.success("当前没有待到货商品。")
@@ -442,6 +465,7 @@ def page_arrival(df):
         items_df.loc[items_df["item_id"].isin(selected_ids), "arrived"] = 1
         items_df.loc[items_df["item_id"].isin(selected_ids), "arrival_date"] = arrival_date.isoformat()
         save_items(items_df)
+        st.cache_data.clear()
         st.success(f"已标记 {len(selected_ids)} 件商品为已到货。")
         st.rerun()
 
@@ -449,10 +473,10 @@ def page_arrival(df):
 def page_labels(df):
     st.subheader("标签打印")
     ready_df = df[
-    (df["arrived"] == 1) &
-    (df["shipped"] == 0) &
-    (df["order_status"] != "cancelled")
-].copy()
+        (df["arrived"] == 1) &
+        (df["shipped"] == 0) &
+        (df["order_status"] != "cancelled")
+    ].copy()
 
     if ready_df.empty:
         st.success("当前没有可打印标签的商品。")
@@ -484,15 +508,17 @@ def page_labels(df):
             items_df = load_items()
             items_df.loc[items_df["item_id"] == int(selected_item), "printed"] = 1
             save_items(items_df)
+            st.cache_data.clear()
             st.success("已标记为已打印。")
             st.rerun()
-            
+
         if st.button("取消此商品", use_container_width=True):
             items_df = load_items()
             items_df.loc[items_df["item_id"] == int(selected_item), "order_status"] = "cancelled"
             items_df.loc[items_df["item_id"] == int(selected_item), "cancel_reason"] = "用户取消"
             items_df.loc[items_df["item_id"] == int(selected_item), "cancelled_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
             save_items(items_df)
+            st.cache_data.clear()
             st.warning("该商品已取消")
             st.rerun()
 
@@ -517,20 +543,20 @@ def page_labels(df):
     for i, row in grouped_df.iterrows():
         with st.container(border=True):
             c1, c2 = st.columns([3, 1])
-            
+
             with c1:
                 st.markdown(f"**{row['客户姓名']}**")
-    
+
                 st.markdown("**客户名称文本框**")
                 st.text_input(
                     f"客户名称_{i}",
                     value=row["客户文本"],
                     key=f"customer_text_{i}"
                 )
-    
+
                 st.markdown("**复制客户名称**")
                 st.code(row["客户文本"], language=None)
-    
+
                 st.markdown("**商品内容文本框**")
                 st.text_area(
                     f"商品内容_{i}",
@@ -538,10 +564,10 @@ def page_labels(df):
                     height=160,
                     key=f"product_text_{i}"
                 )
-    
+
                 st.markdown("**复制商品内容**")
                 st.code(row["商品文本"], language=None)
-            
+
             with c2:
                 st.write(f"商品数：{row['商品数']}")
 
@@ -550,6 +576,7 @@ def page_labels(df):
                     items_df = load_items()
                     items_df.loc[items_df["item_id"].isin(ids), "printed"] = 1
                     save_items(items_df)
+                    st.cache_data.clear()
                     st.success(f"{row['客户姓名']} 已标记打印")
                     st.rerun()
 
@@ -560,6 +587,7 @@ def page_labels(df):
                     items_df.loc[items_df["item_id"].isin(ids), "cancel_reason"] = "用户取消"
                     items_df.loc[items_df["item_id"].isin(ids), "cancelled_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
                     save_items(items_df)
+                    st.cache_data.clear()
                     st.warning(f"{row['客户姓名']} 已取消")
                     st.rerun()
 
@@ -573,10 +601,10 @@ def page_labels(df):
 def page_shipping(df):
     st.subheader("发货登记")
     ship_df = df[
-    (df["arrived"] == 1) &
-    (df["shipped"] == 0) &
-    (df["order_status"] != "cancelled")
-].copy()
+        (df["arrived"] == 1) &
+        (df["shipped"] == 0) &
+        (df["order_status"] != "cancelled")
+    ].copy()
 
     if ship_df.empty:
         st.success("当前没有待发货商品。")
@@ -610,6 +638,7 @@ def page_shipping(df):
         items_df.loc[items_df["item_id"].isin(selected_ids), "shipped_date"] = shipped_date.isoformat()
         items_df.loc[items_df["item_id"].isin(selected_ids), "tracking_no"] = tracking_no.strip()
         save_items(items_df)
+        st.cache_data.clear()
         st.success(f"已标记 {len(selected_ids)} 件商品为已发货。")
         st.rerun()
 
@@ -644,6 +673,7 @@ def page_data(df):
 
         save_orders(orders_df)
         save_items(items_df)
+        st.cache_data.clear()
         st.success("示例数据已生成到 Google Sheet。")
         st.rerun()
 
