@@ -14,7 +14,6 @@ def get_conn():
     return st.connection("gsheets", type=GSheetsConnection)
 
 
-@st.cache_data(ttl="10m")
 def read_sheet(worksheet: str) -> pd.DataFrame:
     conn = get_conn()
     try:
