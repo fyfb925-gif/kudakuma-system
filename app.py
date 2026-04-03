@@ -14,21 +14,20 @@ def get_conn():
     return st.connection("gsheets", type=GSheetsConnection)
 
 
+@st.cache_data(ttl=8, show_spinner=False)
 def read_sheet(worksheet: str) -> pd.DataFrame:
     conn = get_conn()
-    try:
-        df = conn.read(worksheet=worksheet, ttl=0)
-        if df is None:
-            return pd.DataFrame()
-        return pd.DataFrame(df)
-    except Exception as e:
-        raise RuntimeError(f"读取工作表失败：{worksheet} | {e}")
+    df = conn.read(worksheet=worksheet, ttl=8)
+    if df is None:
+        return pd.DataFrame()
+    return pd.DataFrame(df)
 
 
 def write_sheet(worksheet: str, df: pd.DataFrame):
     conn = get_conn()
     try:
         conn.update(worksheet=worksheet, data=df.fillna(""))
+        read_sheet.clear()
     except Exception as e:
         raise RuntimeError(f"写入工作表失败：{worksheet} | {e}")
 
@@ -707,6 +706,13 @@ st.caption("当前数据源：Google Sheet（持久保存版｜速度优化版�
 try:
     df = combine_data()
 except Exception as e:
+    err_text = str(e)
+
+    if "Quota exceeded" in err_text or "RATE_LIMIT_EXCEEDED" in err_text:
+        st.warning("Google Sheet 读取次数过多，系统正在被限流。请先等待 10～30 秒后再刷新。")
+        st.info("这不是数据丢失，通常只是短时间读取过于频繁。")
+        st.stop()
+
     st.error("Google Sheet 连接失败，请检查 Secrets、共享权限，或稍后再试。")
     st.exception(e)
     st.stop()
