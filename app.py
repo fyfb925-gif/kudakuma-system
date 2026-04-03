@@ -530,7 +530,7 @@ def page_labels(df):
     "order_status", "cancel_reason", "cancelled_at"
 ]
 
-            if st.button("标记此商品已打印", use_container_width=True):
+    if st.button("标记此商品已打印", use_container_width=True):
         items_df = df[item_cols].copy()
         items_df["item_id"] = items_df["item_id"].apply(lambda x: safe_int(x, 0))
         items_df.loc[items_df["item_id"] == int(selected_item), "printed"] = 1
