@@ -17,7 +17,7 @@ def get_conn():
 @st.cache_data(ttl=8, show_spinner=False)
 def read_sheet(worksheet: str) -> pd.DataFrame:
     conn = get_conn()
-    df = conn.read(worksheet=worksheet, ttl=8)
+    df = conn.read(worksheet=worksheet, ttl=0)
     if df is None:
         return pd.DataFrame()
     return pd.DataFrame(df)
@@ -642,7 +642,16 @@ def page_shipping(df):
             st.warning("先勾选要发货的商品。")
             return
 
-        items_df = load_items()
+        item_cols = [
+            "item_id", "order_no", "brand", "model", "color", "size", "qty", "reserved",
+            "purchased", "purchase_store", "purchase_date", "arrived", "arrival_date",
+            "printed", "shipped", "shipped_date", "tracking_no", "note",
+            "order_status", "cancel_reason", "cancelled_at"
+        ]
+        
+        items_df = df[item_cols].copy()
+        items_df["item_id"] = items_df["item_id"].apply(lambda x: safe_int(x, 0))
+        
         items_df.loc[items_df["item_id"].isin(selected_ids), "shipped"] = 1
         items_df.loc[items_df["item_id"].isin(selected_ids), "shipped_date"] = shipped_date.isoformat()
         items_df.loc[items_df["item_id"].isin(selected_ids), "tracking_no"] = tracking_no.strip()
