@@ -2,6 +2,7 @@ import pandas as pd
 import streamlit as st
 from datetime import date, datetime
 from streamlit_gsheets import GSheetsConnection
+import time
 
 st.set_page_config(page_title="果熊采购发货系统", page_icon="📦", layout="wide")
 
@@ -14,13 +15,23 @@ def get_conn():
     return st.connection("gsheets", type=GSheetsConnection)
 
 
-@st.cache_data(ttl=8, show_spinner=False)
+@st.cache_data(ttl=10, show_spinner=False)
 def read_sheet(worksheet: str) -> pd.DataFrame:
     conn = get_conn()
-    df = conn.read(worksheet=worksheet, ttl=0)
-    if df is None:
-        return pd.DataFrame()
-    return pd.DataFrame(df)
+
+    last_error = None
+    for i in range(2):
+        try:
+            df = conn.read(worksheet=worksheet, ttl=0)
+            if df is None:
+                return pd.DataFrame()
+            return pd.DataFrame(df)
+        except Exception as e:
+            last_error = e
+            if i == 0:
+                time.sleep(1.2)
+
+    raise RuntimeError(f"读取工作表失败：{worksheet} | {last_error}")
 
 
 def write_sheet(worksheet: str, df: pd.DataFrame):
