@@ -523,16 +523,24 @@ def page_labels(df):
 
         st.text_area("标签内容", value=label_text, height=140)
         st.code(label_text)
+        item_cols = [
+    "item_id", "order_no", "brand", "model", "color", "size", "qty", "reserved",
+    "purchased", "purchase_store", "purchase_date", "arrived", "arrival_date",
+    "printed", "shipped", "shipped_date", "tracking_no", "note",
+    "order_status", "cancel_reason", "cancelled_at"
+]
 
         if st.button("标记此商品已打印", use_container_width=True):
-            items_df = load_items()
+            items_df = df[item_cols].copy()
+items_df["item_id"] = items_df["item_id"].apply(lambda x: safe_int(x, 0))
             items_df.loc[items_df["item_id"] == int(selected_item), "printed"] = 1
             save_items(items_df)
             st.success("已标记为已打印。")
             st.rerun()
 
         if st.button("取消此商品", use_container_width=True):
-            items_df = load_items()
+            items_df = df[item_cols].copy()
+items_df["item_id"] = items_df["item_id"].apply(lambda x: safe_int(x, 0))
             items_df.loc[items_df["item_id"] == int(selected_item), "order_status"] = "cancelled"
             items_df.loc[items_df["item_id"] == int(selected_item), "cancel_reason"] = "用户取消"
             items_df.loc[items_df["item_id"] == int(selected_item), "cancelled_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
