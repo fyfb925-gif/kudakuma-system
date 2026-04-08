@@ -745,11 +745,33 @@ def page_data(df):
 # =========================
 st.markdown("""
 <style>
-    .block-container {padding-top: 1.2rem; padding-bottom: 3rem;}
+    .block-container {
+        padding-top: 1.2rem;
+        padding-bottom: 3rem;
+    }
+
     div[data-testid="metric-container"] {
         border: 1px solid rgba(49, 51, 63, 0.12);
         border-radius: 18px;
         padding: 14px 16px;
+    }
+
+    /* 主按钮：蓝色 */
+    button[kind="primary"] {
+        background-color: #1677ff !important;
+        color: white !important;
+        border: 1px solid #1677ff !important;
+    }
+
+    button[kind="primary"]:hover {
+        background-color: #0958d9 !important;
+        color: white !important;
+        border: 1px solid #0958d9 !important;
+    }
+
+    /* 次按钮：保持浅色，但更清晰一点 */
+    button[kind="secondary"] {
+        font-weight: 600 !important;
     }
 </style>
 """, unsafe_allow_html=True)
