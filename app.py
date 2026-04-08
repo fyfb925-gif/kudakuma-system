@@ -430,9 +430,16 @@ def page_purchase(df):
 
         purchase_date = st.date_input("采购日期", value=date.today())
 
-        c1, c2 = st.columns(2)
-        submit_purchase = c1.form_submit_button("标记为已采购", use_container_width=True)
-        submit_cancel = c2.form_submit_button("取消采购", use_container_width=True)
+        submit_purchase = c1.form_submit_button(
+            "✅ 标记为已采购",
+            use_container_width=True,
+            type="primary"
+        )
+        
+        submit_cancel = c2.form_submit_button(
+            "⚠️ 取消采购",
+            use_container_width=True
+        )
 
     selected_ids = edited.loc[edited["选择"] == True, "item_id"].tolist()
 
