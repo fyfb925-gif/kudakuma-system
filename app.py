@@ -429,10 +429,14 @@ def page_purchase(df):
         )
 
         purchase_date = st.date_input("采购日期", value=date.today())
-        submitted = st.form_submit_button("标记为已采购", use_container_width=True)
 
-    if submitted:
-        selected_ids = edited.loc[edited["选择"] == True, "item_id"].tolist()
+        c1, c2 = st.columns(2)
+        submit_purchase = c1.form_submit_button("标记为已采购", use_container_width=True)
+        submit_cancel = c2.form_submit_button("取消采购", use_container_width=True)
+
+    selected_ids = edited.loc[edited["选择"] == True, "item_id"].tolist()
+
+    if submit_purchase:
         if not selected_ids:
             st.warning("先勾选要处理的商品。")
             return
@@ -444,6 +448,18 @@ def page_purchase(df):
         st.success(f"已标记 {len(selected_ids)} 件商品为已采购。")
         st.rerun()
 
+    if submit_cancel:
+        if not selected_ids:
+            st.warning("先勾选要取消采购的商品。")
+            return
+
+        items_df = load_items()
+        items_df.loc[items_df["item_id"].isin(selected_ids), "reserved"] = 0
+        items_df.loc[items_df["item_id"].isin(selected_ids), "purchased"] = 0
+        items_df.loc[items_df["item_id"].isin(selected_ids), "purchase_date"] = ""
+        save_items(items_df)
+        st.warning(f"已取消 {len(selected_ids)} 件商品的采购需求。")
+        st.rerun()
 
 def page_arrival(df):
     st.subheader("到货登记")
