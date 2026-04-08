@@ -474,45 +474,111 @@ def page_purchase(df):
 
 def page_arrival(df):
     st.subheader("到货登记")
-    arrival_df = df[
+
+    # =========================
+    # 1) 待到货商品
+    # =========================
+    pending_df = df[
         (df["purchased"] == 1) &
         (df["arrived"] == 0) &
         (df["order_status"] != "cancelled")
     ].copy()
 
-    if arrival_df.empty:
+    st.markdown("### 待到货商品")
+
+    if pending_df.empty:
         st.success("当前没有待到货商品。")
+    else:
+        pending_df["选择"] = False
+        display_cols = [
+            "item_id", "order_no", "customer_name", "brand", "model",
+            "color", "size", "qty", "purchase_store", "purchase_date"
+        ]
+
+        with st.form("arrival_form"):
+            edited = st.data_editor(
+                pending_df[["选择"] + display_cols],
+                use_container_width=True,
+                hide_index=True,
+                disabled=display_cols,
+                key="arrival_editor",
+            )
+
+            arrival_date = st.date_input("到货日期", value=date.today())
+
+            submitted = st.form_submit_button(
+                "✅ 标记为已到货",
+                use_container_width=True,
+                type="primary"
+            )
+
+        if submitted:
+            selected_ids = edited.loc[edited["选择"] == True, "item_id"].tolist()
+
+            if not selected_ids:
+                st.warning("先勾选要处理的商品。")
+                return
+
+            items_df = load_items()
+            items_df.loc[items_df["item_id"].isin(selected_ids), "arrived"] = 1
+            items_df.loc[items_df["item_id"].isin(selected_ids), "arrival_date"] = arrival_date.isoformat()
+            save_items(items_df)
+
+            st.success(f"已标记 {len(selected_ids)} 件商品为已到货。")
+            st.rerun()
+
+    # =========================
+    # 2) 已到货商品（可撤销）
+    # =========================
+    st.markdown("---")
+    st.markdown("### 已到货商品（可撤销退回采购）")
+
+    arrived_df = df[
+        (df["purchased"] == 1) &
+        (df["arrived"] == 1) &
+        (df["shipped"] == 0) &
+        (df["order_status"] != "cancelled")
+    ].copy()
+
+    if arrived_df.empty:
+        st.info("当前没有可撤销的已到货商品。")
         return
 
-    arrival_df["选择"] = False
-    display_cols = ["item_id", "order_no", "customer_name", "brand", "model", "color", "size", "qty", "purchase_store", "purchase_date"]
+    arrived_df["选择"] = False
+    display_cols2 = [
+        "item_id", "order_no", "customer_name", "brand", "model",
+        "color", "size", "qty", "purchase_store", "purchase_date", "arrival_date"
+    ]
 
-    with st.form("arrival_form"):
-        edited = st.data_editor(
-            arrival_df[["选择"] + display_cols],
+    with st.form("undo_arrival_form"):
+        edited_arrived = st.data_editor(
+            arrived_df[["选择"] + display_cols2],
             use_container_width=True,
             hide_index=True,
-            disabled=display_cols,
-            key="arrival_editor",
+            disabled=display_cols2,
+            key="undo_arrival_editor",
         )
 
-        arrival_date = st.date_input("到货日期", value=date.today())
-        submitted = st.form_submit_button("标记为已到货", use_container_width=True)
+        undo = st.form_submit_button(
+            "⬅️ 撤销到货（退回采购阶段）",
+            use_container_width=True
+        )
 
-    if submitted:
-        selected_ids = edited.loc[edited["选择"] == True, "item_id"].tolist()
+    if undo:
+        selected_ids = edited_arrived.loc[edited_arrived["选择"] == True, "item_id"].tolist()
+
         if not selected_ids:
-            st.warning("先勾选要处理的商品。")
+            st.warning("先勾选要撤销的商品。")
             return
 
         items_df = load_items()
-        items_df.loc[items_df["item_id"].isin(selected_ids), "arrived"] = 1
-        items_df.loc[items_df["item_id"].isin(selected_ids), "arrival_date"] = arrival_date.isoformat()
+        items_df.loc[items_df["item_id"].isin(selected_ids), "arrived"] = 0
+        items_df.loc[items_df["item_id"].isin(selected_ids), "arrival_date"] = ""
         save_items(items_df)
-        st.success(f"已标记 {len(selected_ids)} 件商品为已到货。")
+
+        st.warning(f"已撤销 {len(selected_ids)} 件商品的到货状态，商品已退回采购阶段。")
         st.rerun()
-
-
+        
 def page_labels(df):
     st.subheader("标签打印")
 
