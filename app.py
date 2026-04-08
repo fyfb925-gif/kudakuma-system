@@ -506,11 +506,20 @@ def page_arrival(df):
 
             arrival_date = st.date_input("到货日期", value=date.today())
 
-            submitted = st.form_submit_button(
-                "✅ 标记为已到货",
-                use_container_width=True,
-                type="primary"
-            )
+            c1, c2 = st.columns(2)
+
+            with c1:
+                submitted = st.form_submit_button(
+                    "✅ 标记为已到货",
+                    use_container_width=True,
+                    type="primary"
+                )
+
+            with c2:
+                back_to_purchase = st.form_submit_button(
+                    "⬅️ 退回采购清单",
+                    use_container_width=True
+                )
 
         if submitted:
             selected_ids = edited.loc[edited["选择"] == True, "item_id"].tolist()
@@ -527,6 +536,20 @@ def page_arrival(df):
             st.success(f"已标记 {len(selected_ids)} 件商品为已到货。")
             st.rerun()
 
+        if back_to_purchase:
+            selected_ids = edited.loc[edited["选择"] == True, "item_id"].tolist()
+
+            if not selected_ids:
+                st.warning("先勾选要退回采购清单的商品。")
+                return
+
+            items_df = load_items()
+            items_df.loc[items_df["item_id"].isin(selected_ids), "purchased"] = 0
+            items_df.loc[items_df["item_id"].isin(selected_ids), "purchase_date"] = ""
+            save_items(items_df)
+
+            st.warning(f"已将 {len(selected_ids)} 件商品退回采购清单。")
+            st.rerun()
     # =========================
     # 2) 已到货商品（可撤销）
     # =========================
