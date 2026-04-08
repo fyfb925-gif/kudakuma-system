@@ -756,21 +756,21 @@ st.markdown("""
         padding: 14px 16px;
     }
 
-    /* 主按钮：蓝色 */
-    button[kind="primary"] {
+    /* 表单主提交按钮：蓝色 */
+    button[kind="primaryFormSubmit"] {
         background-color: #1677ff !important;
         color: white !important;
         border: 1px solid #1677ff !important;
     }
 
-    button[kind="primary"]:hover {
+    button[kind="primaryFormSubmit"]:hover {
         background-color: #0958d9 !important;
         color: white !important;
         border: 1px solid #0958d9 !important;
     }
 
-    /* 次按钮：保持浅色，但更清晰一点 */
-    button[kind="secondary"] {
+    /* 表单次按钮：默认浅色，字重更清晰 */
+    button[kind="secondaryFormSubmit"] {
         font-weight: 600 !important;
     }
 </style>
