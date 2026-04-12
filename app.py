@@ -144,7 +144,7 @@ def load_items():
     cols = [
         "item_id", "order_no", "brand", "model", "color", "size", "qty", "reserved",
         "purchased", "purchase_store", "purchase_date", "arrived", "arrival_date",
-        "printed", "shipped", "shipped_date", "tracking_no", "note",
+        "printed", "shipped", "shipped_date", "shipping_channel", "tracking_no", "note",
         "order_status", "cancel_reason", "cancelled_at"
     ]
     df = read_sheet("order_items")
@@ -210,7 +210,7 @@ def combine_data():
             "order_no", "order_date", "customer_name", "source", "remark",
             "item_id", "brand", "model", "color", "size", "qty", "reserved",
             "purchased", "purchase_store", "purchase_date", "arrived",
-            "arrival_date", "printed", "shipped", "shipped_date",
+            "arrival_date", "printed", "shipped", "shipped_date", "shipping_channel",
             "tracking_no", "note", "order_status", "cancel_reason", "cancelled_at"
         ])
 
@@ -785,54 +785,77 @@ def page_labels(df):
     )
 
 
-def page_shipping(df):
-    st.subheader("发货登记")
-    ship_df = df[
+def page_dashboard(df):
+    st.subheader("首页仪表盘")
+    metrics = fetch_dashboard_metrics(df)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("待采购", metrics["待采购"])
+    c2.metric("已采购未到货", metrics["已采购未到货"])
+    c3.metric("已到货待发货", metrics["已到货待发货"])
+    c4.metric("今日已发货", metrics["今日已发货"])
+
+    if df.empty:
+        st.info("还没有订单，先去“订单录入”添加第一批数据。")
+        return
+
+    st.markdown("### 今日提醒")
+    pending_ship = df[
         (df["arrived"] == 1) &
         (df["shipped"] == 0) &
         (df["order_status"] != "cancelled")
     ].copy()
 
-    if ship_df.empty:
-        st.success("当前没有待发货商品。")
-        return
+    if pending_ship.empty:
+        st.success("目前没有待发货商品。")
+    else:
+        grouped = (
+            pending_ship.groupby("customer_name")
+            .size()
+            .reset_index(name="件数")
+            .sort_values("件数", ascending=False)
+        )
+        st.dataframe(grouped, use_container_width=True, hide_index=True)
 
-    ship_df["选择"] = False
-    display_cols = ["item_id", "order_no", "customer_name", "brand", "model", "color", "size", "printed"]
+    st.markdown("---")
+    st.markdown("### 今日已发货明细")
 
-    # 关键修复：
-    # data_editor 和 form 放在一起，减少勾选状态丢失
-    with st.form("shipping_form"):
-        edited = st.data_editor(
-            ship_df[["选择"] + display_cols],
+    today = today_str()
+    today_shipped = df[
+        (df["shipped"] == 1) &
+        (df["shipped_date"].astype(str) == today) &
+        (df["order_status"] != "cancelled")
+    ].copy()
+
+    if today_shipped.empty:
+        st.info("今天还没有已发货记录。")
+    else:
+        show_cols = [
+            "item_id", "order_no", "customer_name",
+            "brand", "model", "color", "size",
+            "shipping_channel", "tracking_no", "shipped_date"
+        ]
+
+        for col in show_cols:
+            if col not in today_shipped.columns:
+                today_shipped[col] = ""
+
+        st.dataframe(
+            today_shipped[show_cols].sort_values(["shipping_channel", "customer_name", "order_no", "item_id"]),
             use_container_width=True,
-            hide_index=True,
-            disabled=display_cols,
-            key="shipping_editor",
+            hide_index=True
         )
 
-        c1, c2 = st.columns(2)
-        tracking_no = c1.text_input("物流单号")
-        shipped_date = c2.date_input("发货日期", value=date.today())
-        submitted = st.form_submit_button("标记为已发货", use_container_width=True)
+        st.markdown("### 发货渠道统计")
 
-    if submitted:
-        selected_ids = edited.loc[edited["选择"] == True, "item_id"].apply(lambda x: safe_int(x, 0)).tolist()
-    
-        if not selected_ids:
-            st.warning("先勾选要发货的商品。")
-            return
-    
-        items_df = load_items()
-        items_df["item_id"] = items_df["item_id"].apply(lambda x: safe_int(x, 0))
-    
-        items_df.loc[items_df["item_id"].isin(selected_ids), "shipped"] = 1
-        items_df.loc[items_df["item_id"].isin(selected_ids), "shipped_date"] = shipped_date.isoformat()
-        items_df.loc[items_df["item_id"].isin(selected_ids), "tracking_no"] = tracking_no.strip()
-    
-        save_items(items_df)
-        st.success(f"已标记 {len(selected_ids)} 件商品为已发货。")
-        st.rerun()
+        channel_summary = (
+            today_shipped.groupby("shipping_channel")
+            .size()
+            .reset_index(name="件数")
+            .sort_values("件数", ascending=False)
+        )
+
+        st.dataframe(channel_summary, use_container_width=True, hide_index=True)
 
 
 def page_data(df):
