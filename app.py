@@ -215,7 +215,6 @@ def combine_data():
         ])
 
     if orders.empty:
-        # 如果 items 有数据但 orders 暂时空，也不要整页直接没数据
         items = items.copy()
         items["order_date"] = ""
         items["customer_name"] = ""
@@ -277,39 +276,6 @@ def download_df(df, filename, label):
 # =========================
 # 页面
 # =========================
-def page_dashboard(df):
-    st.subheader("首页仪表盘")
-    metrics = fetch_dashboard_metrics(df)
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("待采购", metrics["待采购"])
-    c2.metric("已采购未到货", metrics["已采购未到货"])
-    c3.metric("已到货待发货", metrics["已到货待发货"])
-    c4.metric("今日已发货", metrics["今日已发货"])
-
-    st.markdown("### 今日提醒")
-    if df.empty:
-        st.info("还没有订单，先去“订单录入”添加第一批数据。")
-        return
-
-    pending_ship = df[
-        (df["arrived"] == 1) &
-        (df["shipped"] == 0) &
-        (df["order_status"] != "cancelled")
-    ]
-
-    if pending_ship.empty:
-        st.success("目前没有待发货商品。")
-    else:
-        grouped = (
-            pending_ship.groupby("customer_name")
-            .size()
-            .reset_index(name="件数")
-            .sort_values("件数", ascending=False)
-        )
-        st.dataframe(grouped, use_container_width=True, hide_index=True)
-
-
 def page_order_entry():
     st.subheader("订单录入")
 
@@ -388,6 +354,7 @@ def page_order_entry():
                 "printed": 0,
                 "shipped": 0,
                 "shipped_date": "",
+                "shipping_channel": "",
                 "tracking_no": "",
                 "note": safe_str(row.get("备注")),
                 "order_status": "active",
@@ -440,14 +407,14 @@ def page_purchase(df):
         purchase_date = st.date_input("采购日期", value=date.today())
 
         c1, c2 = st.columns(2)
-        
+
         with c1:
             submit_purchase = st.form_submit_button(
                 "✅ 标记为已采购",
                 use_container_width=True,
                 type="primary"
             )
-        
+
         with c2:
             submit_cancel = st.form_submit_button(
                 "❌ 取消采购",
@@ -460,17 +427,17 @@ def page_purchase(df):
         if not selected_ids:
             st.warning("先勾选要处理的商品。")
             return
-    
+
         items_df = load_items()
-    
+
         selected_rows = edited.loc[
             edited["选择"] == True,
             ["item_id", "brand", "model", "color", "size", "qty", "purchase_store"]
         ].copy()
-    
+
         selected_rows["item_id"] = selected_rows["item_id"].apply(lambda x: safe_int(x, 0))
         selected_rows["qty"] = selected_rows["qty"].apply(lambda x: safe_int(x, 1))
-    
+
         for _, row in selected_rows.iterrows():
             item_id = row["item_id"]
             items_df.loc[items_df["item_id"] == item_id, "brand"] = safe_str(row["brand"])
@@ -479,28 +446,28 @@ def page_purchase(df):
             items_df.loc[items_df["item_id"] == item_id, "size"] = safe_str(row["size"])
             items_df.loc[items_df["item_id"] == item_id, "qty"] = safe_int(row["qty"], 1)
             items_df.loc[items_df["item_id"] == item_id, "purchase_store"] = safe_str(row["purchase_store"])
-    
+
         items_df.loc[items_df["item_id"].isin(selected_ids), "purchased"] = 1
         items_df.loc[items_df["item_id"].isin(selected_ids), "purchase_date"] = purchase_date.isoformat()
         save_items(items_df)
         st.success(f"已标记 {len(selected_ids)} 件商品为已采购。")
         st.rerun()
-        
+
     if submit_cancel:
         if not selected_ids:
             st.warning("先勾选要取消采购的商品。")
             return
-    
+
         items_df = load_items()
-    
+
         selected_rows = edited.loc[
             edited["选择"] == True,
             ["item_id", "brand", "model", "color", "size", "qty", "purchase_store"]
         ].copy()
-    
+
         selected_rows["item_id"] = selected_rows["item_id"].apply(lambda x: safe_int(x, 0))
         selected_rows["qty"] = selected_rows["qty"].apply(lambda x: safe_int(x, 1))
-    
+
         for _, row in selected_rows.iterrows():
             item_id = row["item_id"]
             items_df.loc[items_df["item_id"] == item_id, "brand"] = safe_str(row["brand"])
@@ -509,7 +476,7 @@ def page_purchase(df):
             items_df.loc[items_df["item_id"] == item_id, "size"] = safe_str(row["size"])
             items_df.loc[items_df["item_id"] == item_id, "qty"] = safe_int(row["qty"], 1)
             items_df.loc[items_df["item_id"] == item_id, "purchase_store"] = safe_str(row["purchase_store"])
-    
+
         items_df.loc[items_df["item_id"].isin(selected_ids), "reserved"] = 0
         items_df.loc[items_df["item_id"].isin(selected_ids), "purchased"] = 0
         items_df.loc[items_df["item_id"].isin(selected_ids), "purchase_date"] = ""
@@ -517,12 +484,10 @@ def page_purchase(df):
         st.warning(f"已取消 {len(selected_ids)} 件商品的采购需求。")
         st.rerun()
 
+
 def page_arrival(df):
     st.subheader("到货登记")
 
-    # =========================
-    # 1) 待到货商品
-    # =========================
     pending_df = df[
         (df["purchased"] == 1) &
         (df["arrived"] == 0) &
@@ -595,9 +560,7 @@ def page_arrival(df):
 
             st.warning(f"已将 {len(selected_ids)} 件商品退回采购清单。")
             st.rerun()
-    # =========================
-    # 2) 已到货商品（可撤销）
-    # =========================
+
     st.markdown("---")
     st.markdown("### 已到货商品（可撤销退回采购）")
 
@@ -646,12 +609,11 @@ def page_arrival(df):
 
         st.warning(f"已撤销 {len(selected_ids)} 件商品的到货状态，商品已退回采购阶段。")
         st.rerun()
-        
+
+
 def page_labels(df):
     st.subheader("标签打印")
 
-    # 关键修复：
-    # 已打印 printed == 1 的，不再继续显示在标签区
     ready_df = df[
         (df["arrived"] == 1) &
         (df["printed"] == 0) &
@@ -684,30 +646,31 @@ def page_labels(df):
 
         st.text_area("标签内容", value=label_text, height=140)
         st.code(label_text)
+
         item_cols = [
-    "item_id", "order_no", "brand", "model", "color", "size", "qty", "reserved",
-    "purchased", "purchase_store", "purchase_date", "arrived", "arrival_date",
-    "printed", "shipped", "shipped_date", "tracking_no", "note",
-    "order_status", "cancel_reason", "cancelled_at"
-]
+            "item_id", "order_no", "brand", "model", "color", "size", "qty", "reserved",
+            "purchased", "purchase_store", "purchase_date", "arrived", "arrival_date",
+            "printed", "shipped", "shipped_date", "shipping_channel", "tracking_no", "note",
+            "order_status", "cancel_reason", "cancelled_at"
+        ]
 
-    if st.button("标记此商品已打印", use_container_width=True):
-        items_df = df[item_cols].copy()
-        items_df["item_id"] = items_df["item_id"].apply(lambda x: safe_int(x, 0))
-        items_df.loc[items_df["item_id"] == int(selected_item), "printed"] = 1
-        save_items(items_df)
-        st.success("已标记为已打印。")
-        st.rerun()
+        if st.button("标记此商品已打印", use_container_width=True):
+            items_df = df[item_cols].copy()
+            items_df["item_id"] = items_df["item_id"].apply(lambda x: safe_int(x, 0))
+            items_df.loc[items_df["item_id"] == int(selected_item), "printed"] = 1
+            save_items(items_df)
+            st.success("已标记为已打印。")
+            st.rerun()
 
-    if st.button("取消此商品", use_container_width=True):
-        items_df = df[item_cols].copy()
-        items_df["item_id"] = items_df["item_id"].apply(lambda x: safe_int(x, 0))
-        items_df.loc[items_df["item_id"] == int(selected_item), "order_status"] = "cancelled"
-        items_df.loc[items_df["item_id"] == int(selected_item), "cancel_reason"] = "用户取消"
-        items_df.loc[items_df["item_id"] == int(selected_item), "cancelled_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
-        save_items(items_df)
-        st.warning("该商品已取消")
-        st.rerun()
+        if st.button("取消此商品", use_container_width=True):
+            items_df = df[item_cols].copy()
+            items_df["item_id"] = items_df["item_id"].apply(lambda x: safe_int(x, 0))
+            items_df.loc[items_df["item_id"] == int(selected_item), "order_status"] = "cancelled"
+            items_df.loc[items_df["item_id"] == int(selected_item), "cancel_reason"] = "用户取消"
+            items_df.loc[items_df["item_id"] == int(selected_item), "cancelled_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+            save_items(items_df)
+            st.warning("该商品已取消")
+            st.rerun()
 
         return
 
@@ -783,6 +746,60 @@ def page_labels(df):
         "70x40标签内容.csv",
         "下载 70×40 标签内容 CSV"
     )
+
+
+def page_shipping(df):
+    st.subheader("发货登记")
+    ship_df = df[
+        (df["arrived"] == 1) &
+        (df["shipped"] == 0) &
+        (df["order_status"] != "cancelled")
+    ].copy()
+
+    if ship_df.empty:
+        st.success("当前没有待发货商品。")
+        return
+
+    ship_df["选择"] = False
+    display_cols = ["item_id", "order_no", "customer_name", "brand", "model", "color", "size", "printed"]
+
+    with st.form("shipping_form"):
+        edited = st.data_editor(
+            ship_df[["选择"] + display_cols],
+            use_container_width=True,
+            hide_index=True,
+            disabled=display_cols,
+            key="shipping_editor",
+        )
+
+        c1, c2, c3 = st.columns(3)
+        tracking_no = c1.text_input("物流单号")
+        shipping_channel = c2.selectbox(
+            "发货渠道",
+            ["福冈樱花", "大阪熊本熊", "东京七海", "日本EMS", "日本邮政", "其他"]
+        )
+        shipped_date = c3.date_input("发货日期", value=date.today())
+
+        submitted = st.form_submit_button("标记为已发货", use_container_width=True)
+
+    if submitted:
+        selected_ids = edited.loc[edited["选择"] == True, "item_id"].apply(lambda x: safe_int(x, 0)).tolist()
+
+        if not selected_ids:
+            st.warning("先勾选要发货的商品。")
+            return
+
+        items_df = load_items()
+        items_df["item_id"] = items_df["item_id"].apply(lambda x: safe_int(x, 0))
+
+        items_df.loc[items_df["item_id"].isin(selected_ids), "shipped"] = 1
+        items_df.loc[items_df["item_id"].isin(selected_ids), "shipped_date"] = shipped_date.isoformat()
+        items_df.loc[items_df["item_id"].isin(selected_ids), "tracking_no"] = tracking_no.strip()
+        items_df.loc[items_df["item_id"].isin(selected_ids), "shipping_channel"] = shipping_channel
+
+        save_items(items_df)
+        st.success(f"已标记 {len(selected_ids)} 件商品为已发货。")
+        st.rerun()
 
 
 def page_dashboard(df):
@@ -880,9 +897,78 @@ def page_data(df):
 
         next_id = gen_next_item_id(items_df)
         sample_items = pd.DataFrame([
-            {"item_id": next_id, "order_no": base_order_no, "brand": "KUSHITANI", "model": "K-2440", "color": "黑黄", "size": "XL", "qty": 1, "reserved": 1, "purchased": 1, "purchase_store": "南海部品", "purchase_date": today_str(), "arrived": 1, "arrival_date": today_str(), "printed": 0, "shipped": 0, "shipped_date": "", "tracking_no": "", "note": "示例", "order_status": "active", "cancel_reason": "", "cancelled_at": ""},
-            {"item_id": next_id + 1, "order_no": base_order_no, "brand": "56design", "model": "联名外套", "color": "绿色", "size": "LL", "qty": 1, "reserved": 1, "purchased": 1, "purchase_store": "Webike", "purchase_date": today_str(), "arrived": 1, "arrival_date": today_str(), "printed": 0, "shipped": 0, "shipped_date": "", "tracking_no": "", "note": "示例", "order_status": "active", "cancel_reason": "", "cancelled_at": ""},
-            {"item_id": next_id + 2, "order_no": base_order_no + "-B", "brand": "KUSHITANI", "model": "K-1366", "color": "黑色", "size": "32", "qty": 1, "reserved": 1, "purchased": 0, "purchase_store": "南海部品", "purchase_date": "", "arrived": 0, "arrival_date": "", "printed": 0, "shipped": 0, "shipped_date": "", "tracking_no": "", "note": "示例", "order_status": "active", "cancel_reason": "", "cancelled_at": ""},
+            {
+                "item_id": next_id,
+                "order_no": base_order_no,
+                "brand": "KUSHITANI",
+                "model": "K-2440",
+                "color": "黑黄",
+                "size": "XL",
+                "qty": 1,
+                "reserved": 1,
+                "purchased": 1,
+                "purchase_store": "南海部品",
+                "purchase_date": today_str(),
+                "arrived": 1,
+                "arrival_date": today_str(),
+                "printed": 0,
+                "shipped": 0,
+                "shipped_date": "",
+                "shipping_channel": "",
+                "tracking_no": "",
+                "note": "示例",
+                "order_status": "active",
+                "cancel_reason": "",
+                "cancelled_at": ""
+            },
+            {
+                "item_id": next_id + 1,
+                "order_no": base_order_no,
+                "brand": "56design",
+                "model": "联名外套",
+                "color": "绿色",
+                "size": "LL",
+                "qty": 1,
+                "reserved": 1,
+                "purchased": 1,
+                "purchase_store": "Webike",
+                "purchase_date": today_str(),
+                "arrived": 1,
+                "arrival_date": today_str(),
+                "printed": 0,
+                "shipped": 0,
+                "shipped_date": "",
+                "shipping_channel": "",
+                "tracking_no": "",
+                "note": "示例",
+                "order_status": "active",
+                "cancel_reason": "",
+                "cancelled_at": ""
+            },
+            {
+                "item_id": next_id + 2,
+                "order_no": base_order_no + "-B",
+                "brand": "KUSHITANI",
+                "model": "K-1366",
+                "color": "黑色",
+                "size": "32",
+                "qty": 1,
+                "reserved": 1,
+                "purchased": 0,
+                "purchase_store": "南海部品",
+                "purchase_date": "",
+                "arrived": 0,
+                "arrival_date": "",
+                "printed": 0,
+                "shipped": 0,
+                "shipped_date": "",
+                "shipping_channel": "",
+                "tracking_no": "",
+                "note": "示例",
+                "order_status": "active",
+                "cancel_reason": "",
+                "cancelled_at": ""
+            },
         ])
         items_df = pd.concat([items_df, sample_items], ignore_index=True)
 
@@ -908,7 +994,6 @@ st.markdown("""
         padding: 14px 16px;
     }
 
-    /* 表单主提交按钮：蓝色 */
     button[kind="primaryFormSubmit"] {
         background-color: #1677ff !important;
         color: white !important;
@@ -921,7 +1006,6 @@ st.markdown("""
         border: 1px solid #0958d9 !important;
     }
 
-    /* 表单次按钮：默认浅色，字重更清晰 */
     button[kind="secondaryFormSubmit"] {
         font-weight: 600 !important;
     }
