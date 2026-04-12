@@ -424,7 +424,16 @@ def page_purchase(df):
             purchase_df[["选择"] + display_cols],
             use_container_width=True,
             hide_index=True,
-            disabled=display_cols,
+            disabled=["item_id", "order_no", "customer_name"],
+            column_config={
+                "选择": st.column_config.CheckboxColumn("选择"),
+                "brand": st.column_config.TextColumn("brand", width="small"),
+                "model": st.column_config.TextColumn("model", width="medium"),
+                "color": st.column_config.TextColumn("color", width="medium"),
+                "size": st.column_config.TextColumn("size", width="small"),
+                "qty": st.column_config.NumberColumn("qty", min_value=1, step=1),
+                "purchase_store": st.column_config.TextColumn("purchase_store", width="medium"),
+            },
             key="purchase_editor",
         )
 
@@ -451,20 +460,56 @@ def page_purchase(df):
         if not selected_ids:
             st.warning("先勾选要处理的商品。")
             return
-
+    
         items_df = load_items()
+    
+        selected_rows = edited.loc[
+            edited["选择"] == True,
+            ["item_id", "brand", "model", "color", "size", "qty", "purchase_store"]
+        ].copy()
+    
+        selected_rows["item_id"] = selected_rows["item_id"].apply(lambda x: safe_int(x, 0))
+        selected_rows["qty"] = selected_rows["qty"].apply(lambda x: safe_int(x, 1))
+    
+        for _, row in selected_rows.iterrows():
+            item_id = row["item_id"]
+            items_df.loc[items_df["item_id"] == item_id, "brand"] = safe_str(row["brand"])
+            items_df.loc[items_df["item_id"] == item_id, "model"] = safe_str(row["model"])
+            items_df.loc[items_df["item_id"] == item_id, "color"] = safe_str(row["color"])
+            items_df.loc[items_df["item_id"] == item_id, "size"] = safe_str(row["size"])
+            items_df.loc[items_df["item_id"] == item_id, "qty"] = safe_int(row["qty"], 1)
+            items_df.loc[items_df["item_id"] == item_id, "purchase_store"] = safe_str(row["purchase_store"])
+    
         items_df.loc[items_df["item_id"].isin(selected_ids), "purchased"] = 1
         items_df.loc[items_df["item_id"].isin(selected_ids), "purchase_date"] = purchase_date.isoformat()
         save_items(items_df)
         st.success(f"已标记 {len(selected_ids)} 件商品为已采购。")
         st.rerun()
-
+        
     if submit_cancel:
         if not selected_ids:
             st.warning("先勾选要取消采购的商品。")
             return
-
+    
         items_df = load_items()
+    
+        selected_rows = edited.loc[
+            edited["选择"] == True,
+            ["item_id", "brand", "model", "color", "size", "qty", "purchase_store"]
+        ].copy()
+    
+        selected_rows["item_id"] = selected_rows["item_id"].apply(lambda x: safe_int(x, 0))
+        selected_rows["qty"] = selected_rows["qty"].apply(lambda x: safe_int(x, 1))
+    
+        for _, row in selected_rows.iterrows():
+            item_id = row["item_id"]
+            items_df.loc[items_df["item_id"] == item_id, "brand"] = safe_str(row["brand"])
+            items_df.loc[items_df["item_id"] == item_id, "model"] = safe_str(row["model"])
+            items_df.loc[items_df["item_id"] == item_id, "color"] = safe_str(row["color"])
+            items_df.loc[items_df["item_id"] == item_id, "size"] = safe_str(row["size"])
+            items_df.loc[items_df["item_id"] == item_id, "qty"] = safe_int(row["qty"], 1)
+            items_df.loc[items_df["item_id"] == item_id, "purchase_store"] = safe_str(row["purchase_store"])
+    
         items_df.loc[items_df["item_id"].isin(selected_ids), "reserved"] = 0
         items_df.loc[items_df["item_id"].isin(selected_ids), "purchased"] = 0
         items_df.loc[items_df["item_id"].isin(selected_ids), "purchase_date"] = ""
