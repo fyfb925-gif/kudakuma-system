@@ -817,24 +817,19 @@ def page_shipping(df):
         submitted = st.form_submit_button("标记为已发货", use_container_width=True)
 
     if submitted:
-        selected_ids = edited.loc[edited["选择"] == True, "item_id"].tolist()
+        selected_ids = edited.loc[edited["选择"] == True, "item_id"].apply(lambda x: safe_int(x, 0)).tolist()
+    
         if not selected_ids:
             st.warning("先勾选要发货的商品。")
             return
-
-        item_cols = [
-            "item_id", "order_no", "brand", "model", "color", "size", "qty", "reserved",
-            "purchased", "purchase_store", "purchase_date", "arrived", "arrival_date",
-            "printed", "shipped", "shipped_date", "tracking_no", "note",
-            "order_status", "cancel_reason", "cancelled_at"
-        ]
-        
-        items_df = df[item_cols].copy()
+    
+        items_df = load_items()
         items_df["item_id"] = items_df["item_id"].apply(lambda x: safe_int(x, 0))
-        
+    
         items_df.loc[items_df["item_id"].isin(selected_ids), "shipped"] = 1
         items_df.loc[items_df["item_id"].isin(selected_ids), "shipped_date"] = shipped_date.isoformat()
         items_df.loc[items_df["item_id"].isin(selected_ids), "tracking_no"] = tracking_no.strip()
+    
         save_items(items_df)
         st.success(f"已标记 {len(selected_ids)} 件商品为已发货。")
         st.rerun()
