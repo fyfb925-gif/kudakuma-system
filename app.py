@@ -383,6 +383,12 @@ def page_purchase(df):
         st.success("当前没有待采购商品。")
         return
 
+    purchase_df["item_id"] = purchase_df["item_id"].apply(lambda x: safe_int(x, 0))
+    purchase_df["qty"] = purchase_df["qty"].apply(lambda x: safe_int(x, 1))
+
+    for col in ["order_no", "customer_name", "brand", "model", "color", "size", "purchase_store"]:
+        purchase_df[col] = purchase_df[col].apply(safe_str)
+
     purchase_df["选择"] = False
     display_cols = ["item_id", "order_no", "customer_name", "brand", "model", "color", "size", "qty", "purchase_store"]
 
@@ -450,6 +456,10 @@ def page_purchase(df):
         items_df.loc[items_df["item_id"].isin(selected_ids), "purchased"] = 1
         items_df.loc[items_df["item_id"].isin(selected_ids), "purchase_date"] = purchase_date.isoformat()
         save_items(items_df)
+
+        if "purchase_editor" in st.session_state:
+            del st.session_state["purchase_editor"]
+
         st.success(f"已标记 {len(selected_ids)} 件商品为已采购。")
         st.rerun()
 
@@ -481,6 +491,10 @@ def page_purchase(df):
         items_df.loc[items_df["item_id"].isin(selected_ids), "purchased"] = 0
         items_df.loc[items_df["item_id"].isin(selected_ids), "purchase_date"] = ""
         save_items(items_df)
+
+        if "purchase_editor" in st.session_state:
+            del st.session_state["purchase_editor"]
+
         st.warning(f"已取消 {len(selected_ids)} 件商品的采购需求。")
         st.rerun()
 
